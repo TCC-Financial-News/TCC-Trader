@@ -33096,11 +33096,11 @@ function _syncAllProfilePages() {
 //    - อย่าเพิ่ม SCRIPT_URL ซ้ำ — มีอยู่แล้วบรรทัดแรก
 // ══════════════════════════════════════════════════════════════════
 
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwocCEr-mQu6esBJBRRElo68Y2GLPJryhAShi9FSm__G9mD0TV5oa9IAa8cFxBn_GlILw/exec'; // [WD-SIG 2026-11-11] ชี้ deployment เวอร์ชัน 304 (wd-2026-11-11-r2) — เดิม AKfycbxWdh… เป็นโค้ดเก่าไม่เซ็น sig  |  // [v2.69-HEDGE-MERGE] updated to deploy v222 (26 Sep 2026 14:52)
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwaQ6yFOEADbDirYx6RwlvzPMmDRR3HX0WM8YsfHzmfrUIouSbEX1uaa2SDOAKEWm84Tg/exec'; // [WD-SIG 2026-11-11] ชี้ deployment เวอร์ชัน 304 (wd-2026-11-11-r2) — เดิม AKfycbxWdh… เป็นโค้ดเก่าไม่เซ็น sig  |  // [v2.69-HEDGE-MERGE] updated to deploy v222 (26 Sep 2026 14:52)
 
 // [NEW] Admin Panel GAS Web App (แยกจาก SCRIPT_URL หลัก — ใช้สำหรับ action ที่ admin เป็นเจ้าของ
 // เช่น getTeamBalance / getSystemBalances / distributeProfit หากฝั่ง admin deploy คนละ Web App)
-const ADMIN_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxsIzb3VrtwgJM22j1BV_S5jqOwJrWHZulMsrZkhDgivJ3wxhegtQ3NB8uKGggdaEkmyQ/exec';
+const ADMIN_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx_HKE2emIBg50p7GAjjSA_g5AZRajykfnvzsVBzV2Zdb8f58Ng1KUSsEnse0fQspSX/exec';
 
 // [WALLET] Wallet GAS Web App — แยกจาก GAS หลักและ Admin GAS
 // จัดการ: saveWallet / saveWalletTx / getWallets / getWalletTxHistory
