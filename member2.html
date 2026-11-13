@@ -621,15 +621,61 @@ window.addEventListener('message', function(ev) {
 // ⚠️ แทนที่ด้วย GAS Web App URL เดียวกับที่ index.html ใช้ (SCRIPT_URL)
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwocCEr-mQu6esBJBRRElo68Y2GLPJryhAShi9FSm__G9mD0TV5oa9IAa8cFxBn_GlILw/exec';
 
-async function dbCallRaw(action, data = {}) {
+// [AUTH+D1 v1.0] member2 เป็น iframe same-origin กับ index.html → ใช้ session token ชุดเดียวกัน (localStorage 'tcc_login_session')
+//   เดิมส่ง { action, data } ไม่มี token → GAS Main ตอบ "[AUTH] UNAUTHORIZED (ไม่พบ session token)" ทุก action
+function _m2Sess() { try { return JSON.parse(localStorage.getItem('tcc_login_session') || 'null'); } catch (e) { return null; } }
+function _m2Token() { const s = _m2Sess(); if (!s || !s.token) return ''; if (s.tokenExp && Date.now() >= s.tokenExp - 60000) return ''; return s.token; }
+async function _m2EnsureToken(force) {
+  if (!force && _m2Token()) return _m2Token();
+  try { if (window.parent && window.parent !== window && typeof window.parent._tccEnsureSession === 'function') await window.parent._tccEnsureSession(!!force); } catch (e) {}   // ให้ index ออก token ใหม่ (same-origin)
+  return _m2Token();
+}
+// อ่านจาก D1 (Worker) ก่อนสำหรับ 2 action นี้ — ล้มเหลว/STALE/ไม่แน่ใจ = null → ถอยไป GAS เหมือนเดิม
+const _M2_D1_URL = 'https://tcc-worker-data.tcc-financial-news.workers.dev/api/member/read';
+const _M2_D1_ACTIONS = { getMemberDashboard: 1, getReferralDashboard: 1 };
+function _m2D1ShapeOk(action, d) {
+  if (!d || typeof d !== 'object') return false;
+  if (action === 'getMemberDashboard') return !!d.member && !!d.summary && Array.isArray(d.ledger) && Array.isArray(d.realizedPnl);
+  if (action === 'getReferralDashboard') return !!d.referrer && Array.isArray(d.referredMembers);
+  return false;
+}
+async function _m2D1Read(action, data, token) {
+  try {
+    const s = _m2Sess(); if (!s || !s.uid) return null;
+    const u = String(s.uid).trim().toLowerCase();
+    if (String((data && data.uid) || '').trim().toLowerCase() !== u) return null;
+    if (localStorage.getItem('tcc_d1_off') === '1') return null;
+    let w = null; try { w = JSON.parse(localStorage.getItem('tcc_d1_wts_v1') || 'null'); } catch (e) { w = null; }
+    if (w && w.u === u && w.d && (w.d.comm || 0) > Date.now()) return null;   // เพิ่งเขียนแล้วไม่แน่ใจ → GAS
+    const minS = (w && w.u === u && w.w && w.w.comm) || 0;                     // เขียนล่าสุดของกลุ่ม comm (index เป็นคนบันทึก)
+    const ctrl = new AbortController(), tm = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(_M2_D1_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ action: action, params: {}, min_synced: minS }), signal: ctrl.signal });
+      if (r.status !== 200) return null;
+      const b = await r.json().catch(() => null);
+      if (b && b.status === 'ok' && _m2D1ShapeOk(action, b.data)) return b.data;
+      return null;
+    } finally { clearTimeout(tm); }
+  } catch (e) { return null; }
+}
+async function dbCallRaw(action, data = {}, _retry) {
+  const token = await _m2EnsureToken(false);
+  if (_M2_D1_ACTIONS[action] && !_retry && token) { const d1 = await _m2D1Read(action, data, token); if (d1) return d1; }
   const res = await fetch(SCRIPT_URL, {
     method:   'POST',
     headers:  { 'Content-Type': 'text/plain' },
-    body:     JSON.stringify({ action, data }),
+    body:     JSON.stringify({ action, data, token }),
     redirect: 'follow',
   });
   const json = await res.json();
-  if (!json.ok) throw new Error(json.error || 'GAS error: ' + action);
+  if (!json.ok) {
+    if (!_retry && /\[AUTH\] UNAUTHORIZED/.test(json.error || '')) {   // token หมดอายุ/ยังไม่มี → ขอใหม่จาก index แล้วลองอีกครั้งเดียว
+      const t = await _m2EnsureToken(true);
+      if (t) return dbCallRaw(action, data, true);
+    }
+    throw new Error(json.error || 'GAS error: ' + action);
+  }
   return json.data;
 }
 
