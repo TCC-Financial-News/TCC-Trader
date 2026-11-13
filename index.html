@@ -17632,7 +17632,45 @@ async function _commFetchWithRetry(action, data, cacheKey, ttl) {
   }
 }
 
-async function astRenderCommissionTab() {
+// [PERF-COMM 2026-11-13] ใช้ข้อมูล dash/ref (จาก GAS หรือ cache) อัปเดต state ของ Commission tab — แยกออกมาเพื่อใช้ซ้ำทั้งตอน seed จาก cache และตอนได้ข้อมูลสด
+function _astApplyCommData(dash, ref) {
+  if (dash && dash.member) {
+    commissionBalance = parseFloat(dash.member.commissionBalance) || 0;
+    astCommIsLeader = !!dash.member.isLeader;
+  }
+  // [NEW v3] เก็บ realizedPnl + ledger (จาก response getMemberDashboard เดิม) ไว้ให้ astCommRenderWidget()
+  // คำนวณการ์ดสรุป/donut/ตารางเอง ฝั่ง client — ไม่ยิง action ใหม่
+  if (dash) {
+    astCommRows = [
+      ...(Array.isArray(dash.realizedPnl) ? dash.realizedPnl : []).map(r => ({ date: r.date, type: 'Realized PNL', amount: parseFloat(r.amount) || 0, note: r.note || '' })),
+      // [FIX v3.1] กรอง CommissionWithdraw ออก — เป็น internal transfer entry ไม่ใช่ income
+      // GAS v2.32 กรองให้แล้ว แต่ filter ซ้ำฝั่ง client เป็น defense-in-depth
+      // [DETAIL v5] เก็บ contractId/sourceUid/note ต่อ (GAS ส่งมาอยู่แล้วจาก getMemberDashboard) — เดิม map ทิ้งไป
+      ...(Array.isArray(dash.ledger) ? dash.ledger : []).filter(r => r.type !== 'CommissionWithdraw').map(r => ({ date: r.date, type: r.type, amount: parseFloat(r.amount) || 0, contractId: r.contractId || '', sourceUid: r.sourceUid || '', note: r.note || '' })),
+    ];
+  }
+  if (ref && ref.referrer) {
+    commissionApprovedCount = ref.referrer.approvedCount || 0;
+    commissionMinApproved   = ref.referrer.minApprovedToWithdraw || 0;
+    commissionMinAmount     = ref.referrer.minAmountToWithdraw || 0;
+    commissionCanTransfer   = commissionApprovedCount >= commissionMinApproved;
+  }
+  // [NEW] เก็บ referredMembers ให้ Commission History overlay ใช้ได้โดยตรง
+  if (ref && Array.isArray(ref.referredMembers)) {
+    astCommHistRefMembers = ref.referredMembers;
+  }
+  // [v3.2 / GAS v2.33] commissionBalance มาจาก Ledger net โดยตรงแล้ว (single source of truth)
+  // safety net: ถ้า dash.member.commissionBalance ยังเป็น 0 แต่ summary.totalCommissionEarned มีค่า
+  // (GAS เก่า / cache ค้าง) → ใช้ summary แทน
+  if (commissionBalance <= 0 && dash && dash.summary) {
+    const netFromLedger = parseFloat(dash.summary.totalCommissionEarned) || 0;
+    if (netFromLedger > 0) commissionBalance = netFromLedger;
+  }
+}
+
+// opts.silent = true → โหลดเบื้องหลัง (preload ตอนเข้าแอป): ไม่ขึ้น toast / ไม่ตั้งสถานะ "ลองใหม่" ถ้าล้มเหลว
+async function astRenderCommissionTab(opts) {
+  const _silent = !!(opts && opts.silent === true);
   // [v3 PERF] ถ้ามีข้อมูล cache อยู่แล้ว → render ทันทีก่อน (instant display, no flicker)
   if (_commissionLoaded) {
     astUpdateCommissionDisplay();
@@ -17649,6 +17687,20 @@ async function astRenderCommissionTab() {
   const uid = (_sess && _sess.uid) ? String(_sess.uid).trim()
             : (typeof USER_PROFILE !== 'undefined' && USER_PROFILE ? USER_PROFILE.uid : '');
   if (!uid) { astUpdateCommissionDisplay(); return; }
+
+  // [PERF-COMM 2026-11-13] cache-first: ยังไม่เคยโหลดในรอบนี้ แต่มี cache เดิมใน localStorage (แม้หมดอายุ) → แสดงทันที
+  // แล้วค่อยรีเฟรชจาก GAS เบื้องหลัง (เดิมค้างที่ ⏳ จนกว่า GAS จะตอบ) · ถ้า GAS ล้ม ก็ยังมียอดล่าสุดที่เคยโหลดให้เห็น
+  if (!_commissionLoaded && !_commTabLoading) {
+    try {
+      const _sd = LS.get('commdash_' + uid), _sr = LS.get('commref_' + uid);
+      if (_sd && _sd.data && _sd.data.member) {
+        _astApplyCommData(_sd.data, _sr && _sr.data);
+        _commissionLoaded = true;
+        astUpdateCommissionDisplay();
+        astCommRenderWidget();
+      }
+    } catch (_e) { /* cache เสีย → โหลดสดตามปกติ */ }
+  }
 
   // [v3 PERF] Throttle: ถ้าโหลด uid เดิมภายใน 30 วินาที ให้ใช้ cache — ไม่ยิง GAS ซ้ำ
   const now = Date.now();
@@ -17679,43 +17731,12 @@ async function astRenderCommissionTab() {
     ]);
     _commTabLastUid = uid;
     _commTabLastMs  = Date.now();
-    if (dash && dash.member) {
-      commissionBalance = parseFloat(dash.member.commissionBalance) || 0;
-      astCommIsLeader = !!dash.member.isLeader;
-    }
-    // [NEW v3] เก็บ realizedPnl + ledger (จาก response getMemberDashboard เดิม) ไว้ให้ astCommRenderWidget()
-    // คำนวณการ์ดสรุป/donut/ตารางเอง ฝั่ง client — ไม่ยิง action ใหม่
-    if (dash) {
-      astCommRows = [
-        ...(Array.isArray(dash.realizedPnl) ? dash.realizedPnl : []).map(r => ({ date: r.date, type: 'Realized PNL', amount: parseFloat(r.amount) || 0, note: r.note || '' })),
-        // [FIX v3.1] กรอง CommissionWithdraw ออก — เป็น internal transfer entry ไม่ใช่ income
-        // GAS v2.32 กรองให้แล้ว แต่ filter ซ้ำฝั่ง client เป็น defense-in-depth
-        // [DETAIL v5] เก็บ contractId/sourceUid/note ต่อ (GAS ส่งมาอยู่แล้วจาก getMemberDashboard) — เดิม map ทิ้งไป
-        ...(Array.isArray(dash.ledger) ? dash.ledger : []).filter(r => r.type !== 'CommissionWithdraw').map(r => ({ date: r.date, type: r.type, amount: parseFloat(r.amount) || 0, contractId: r.contractId || '', sourceUid: r.sourceUid || '', note: r.note || '' })),
-      ];
-    }
-    if (ref && ref.referrer) {
-      commissionApprovedCount = ref.referrer.approvedCount || 0;
-      commissionMinApproved   = ref.referrer.minApprovedToWithdraw || 0;
-      commissionMinAmount     = ref.referrer.minAmountToWithdraw || 0;
-      commissionCanTransfer   = commissionApprovedCount >= commissionMinApproved;
-    }
-    // [NEW] เก็บ referredMembers ให้ Commission History overlay ใช้ได้โดยตรง
-    if (ref && Array.isArray(ref.referredMembers)) {
-      astCommHistRefMembers = ref.referredMembers;
-    }
-    // [v3.2 / GAS v2.33] commissionBalance มาจาก Ledger net โดยตรงแล้ว (single source of truth)
-    // safety net: ถ้า dash.member.commissionBalance ยังเป็น 0 แต่ summary.totalCommissionEarned มีค่า
-    // (GAS เก่า / cache ค้าง) → ใช้ summary แทน
-    if (commissionBalance <= 0 && dash && dash.summary) {
-      const netFromLedger = parseFloat(dash.summary.totalCommissionEarned) || 0;
-      if (netFromLedger > 0) commissionBalance = netFromLedger;
-    }
+    _astApplyCommData(dash, ref); // [PERF-COMM] logic เดิมย้ายไปฟังก์ชันกลาง
     _commissionLoaded = true;
     _commTabFailed = false; // [FIX] โหลดสำเร็จ → เคลียร์สถานะ error เดิม (ถ้ามี)
   } catch (e) {
     console.warn('[astRenderCommissionTab]', e);
-    if (!_commissionLoaded) { _commTabFailed = true; showToast(tccT('toast_commission_load_fail')); }
+    if (!_commissionLoaded && !_silent) { _commTabFailed = true; showToast(tccT('toast_commission_load_fail')); } // [PERF-COMM] preload เบื้องหลังไม่ขึ้น toast
   } finally {
     _commTabLoading = false; // ปลดล็อคเสมอ ไม่ว่า success หรือ error
   }
@@ -33665,8 +33686,10 @@ const _D1_MODE_KEY = 'tcc_d1_mode';
 const _D1_MODE_RECHECK_MS = 6 * 3600 * 1000;
 const _D1_WTS_KEY = 'tcc_d1_wts_v1';
 const _D1_OFF_KEY = 'tcc_d1_off';
-const _D1_READ = Object.assign(Object.create(null), { getOpenPositions: 'positions', getOpenOrders: 'orders', getMyLoans: 'loans', getMyMessages: 'messages', getFilteredTransactions: 'tx' });
-const _D1_GROUPS = ['positions', 'orders', 'loans', 'messages', 'tx'];
+const _D1_READ = Object.assign(Object.create(null), { getOpenPositions: 'positions', getOpenOrders: 'orders', getMyLoans: 'loans', getMyMessages: 'messages', getFilteredTransactions: 'tx',
+  // [D1-R V1.4 PERF 2026-11-13] คลื่น 2: Commission / ยอดเงิน — comm = ledger+Realized PNL+members/team/referrals · bal = Users (ยอด) + SpotCoinBalances
+  getMemberDashboard: 'comm', getReferralDashboard: 'comm', getDashboardLite: 'bal' });
+const _D1_GROUPS = ['positions', 'orders', 'loans', 'messages', 'tx', 'comm', 'bal'];
 // action เขียน → กลุ่มที่อาจเปลี่ยน (ได้จากการไล่ call-graph ของ GAS Main จริง — ดู gen_d1_write_groups.js) · action ที่ "ไม่อยู่ในตารางนี้และไม่ใช่ get*/check*/export*" = ถือว่ากระทบทุกกลุ่ม (ปลอดภัยไว้ก่อน)
 const _D1_ALL4 = ['positions', 'orders', 'messages', 'tx'];
 const _D1_WRITE_GROUPS = Object.assign(Object.create(null), {
@@ -33686,10 +33709,16 @@ const _D1_WRITE_GROUPS = Object.assign(Object.create(null), {
   logOpen: _D1_ALL4, logClose: _D1_ALL4, logEarnClaimTrade: _D1_ALL4, logEarnClaimApt: _D1_ALL4, logEarnLiquidate: _D1_ALL4, logEarnRedeem: _D1_ALL4,
   forceLiquidateContract: _D1_ALL4, logEarnCreate: ['messages', 'tx'], logEarnClaim: ['positions', 'tx'], logEarnClaimFixed: ['tx'],
 });
+// [D1-R V1.4] action เขียนที่ "พิสูจน์แล้วว่าไม่แตะ Users/ยอดเงิน/Ledger" — นอกจากนี้ทุกการเขียนถือว่ากระทบกลุ่ม bal + comm (ปลอดภัยไว้ก่อน: ระหว่างนั้นยอดเงิน/Commission อ่านจาก GAS จน D1 ซิงก์ทัน)
+const _D1_NO_MONEY = Object.assign(Object.create(null), {
+  uploadImage: 1, updateRefreshTimestamp: 1, snapshotPortfolio: 1, markMessageRead: 1, markAllMessagesRead: 1,
+  assignDepositWallet: 1, updateTpsl: 1, updateFuturesTpSl: 1,
+});
 function _d1WriteGroups(action) {
   if (action === 'issueSession' || action === 'workerProxy' || /^(get|check|export)[A-Z]/.test(action)) return null;   // ไม่ใช่การเขียน
   const g = _D1_WRITE_GROUPS[action];   // ตารางไม่มี prototype → ไม่โดน 'constructor' ฯลฯ
-  return g ? g : _D1_GROUPS;
+  if (!g) return _D1_GROUPS;            // ไม่รู้จัก = กระทบทุกกลุ่ม
+  return _D1_NO_MONEY[action] ? g : g.concat(['bal', 'comm']);
 }
 
 // ── เวลาเขียนล่าสุดต่อกลุ่ม (ts จากเซิร์ฟเวอร์ → min_synced) · เขียนไม่แน่ใจผล → d[g] = ข้าม D1 ถึงเวลานั้น (นาฬิกาเครื่องเอง ไม่พึ่ง clock skew) ──
@@ -33753,6 +33782,10 @@ function _d1ShapeOk(action, d) {
   if (action === 'getOpenPositions' || action === 'getOpenOrders' || action === 'getMyLoans') return Array.isArray(d);
   if (action === 'getMyMessages') return !!d && typeof d === 'object' && Array.isArray(d.messages);
   if (action === 'getFilteredTransactions') return !!d && typeof d === 'object' && Array.isArray(d.rows);
+  // [D1-R V1.4] คลื่น 2 — ต้องมีโครงสร้างครบเท่าที่ผู้เรียกเดิมใช้ ไม่งั้นถอยไป GAS
+  if (action === 'getMemberDashboard') return !!d && typeof d === 'object' && !!d.member && typeof d.member === 'object' && !!d.summary && Array.isArray(d.ledger) && Array.isArray(d.realizedPnl);
+  if (action === 'getReferralDashboard') return !!d && typeof d === 'object' && !!d.referrer && typeof d.referrer === 'object' && Array.isArray(d.referredMembers);
+  if (action === 'getDashboardLite') return !!d && typeof d === 'object' && !!d.user && typeof d.user === 'object' && Array.isArray(d.spotCoins);
   return false;
 }
 /** ส่งคำขอไป Worker · คืน { status, body } · เครือข่าย/timeout → throw Error ที่มี .code='NET' */
@@ -34223,7 +34256,37 @@ function _invalidateDashCache() {
 // ══════════════════════════════════════════════════════════════════
 
 // ── Dashboard (Read) ──────────────────────────────────────────────
-async function loadDashboard() {
+// [PERF-DASH 2026-11-13] opts.cacheFirst = true (ใช้ตอนเปิดแอป/boot เท่านั้น):
+//   มี cache 'dash_<uid>' ใน localStorage (แม้หมดอายุ) → แสดงยอด/ข้อมูลจาก cache ทันที แล้วดึง GAS เบื้องหลังมาทับเมื่อได้ข้อมูลสด
+//   ไม่มี cache → ทำงานเหมือนเดิม (รอ GAS) · การเรียกอื่นทั้งหมด (หลังเทรด/โอน/รีเฟรช) ไม่ส่ง opts → GAS-first เหมือนเดิมทุกประการ
+//   ข้อมูลจาก cache ถูกประมวลผลแบบ "ไม่สด" (_dashFresh=false) → ตัวกันข้อมูลเก่าเดิม (setDirectWalletBalance ฯลฯ) ทำงานตามปกติ
+async function loadDashboard(opts) {
+  if (opts && opts.cacheFirst === true) {
+    let _cd = null;
+    try {
+      const _s0 = (typeof _lgLoadSession === 'function') ? _lgLoadSession() : null;
+      const _u0 = (_s0 && _s0.uid) ? String(_s0.uid).trim() : USER_PROFILE.uid;
+      const _c0 = LS.get('dash_' + _u0);
+      if (_c0 && _c0.data && _c0.data.user) _cd = _c0.data;
+    } catch (_e) { _cd = null; }
+    // [PERF-D1 2026-11-13] ยอดเงินจาก D1 (getDashboardLite: Users + SpotCoinBalances — อ่านแถวเดียว ไม่สแกนชีต) ขึ้นก่อน getDashboard ของ GAS
+    //   ใช้เฉพาะถ้า GAS ยังตอบไม่เสร็จ (กันข้อมูลจาก D1 ที่เก่ากว่าไปทับข้อมูลสดจาก GAS) · D1 ปิด/ไม่สด/ล้มเหลว → _d1TryRead คืน null = ใช้ cache/GAS ตามเดิม
+    let _gasDone = false;
+    if (_cd) { try { await _loadDashboardImpl(_cd); } catch (_e) { console.warn('[loadDashboard] cache render error:', _e && _e.message); } }
+    try {
+      if (typeof _d1TryRead === 'function') {
+        _d1TryRead('getDashboardLite', {}).then(r => {
+          if (r && r.data && !_gasDone) _loadDashboardImpl(r.data).catch(e => console.warn('[loadDashboard] D1 lite apply error:', e && e.message));
+        }).catch(() => {});
+      }
+    } catch (_e) {}
+    // รีเฟรชสดจาก GAS เบื้องหลัง — ผลสดจะทับยอดจาก cache/D1 เมื่อมาถึง
+    return _loadDashboardImpl(null).finally(() => { _gasDone = true; });
+  }
+  return _loadDashboardImpl(null);
+}
+
+async function _loadDashboardImpl(_injected) {
   // [FIX dashboard-uid] USER_PROFILE.uid อาจยังเป็นค่า hardcode default
   // ถ้า loadDashboard ถูกเรียกก่อน autoLoginFromMembers ทำงานเสร็จ
   // → อ่าน uid จาก session โดยตรงก่อน (เหมือน loadOfflineState)
@@ -34236,6 +34299,10 @@ async function loadDashboard() {
   let dash = null;
   const _dashT0 = Date.now();  // [vx10-OVW-DIRECT] เวลาเริ่มอ่าน (ใช้กันข้อมูลเก่าทับ)
   let _dashFresh = false;      // true = ได้ข้อมูลสดจาก GAS (ไม่ใช่ cache fallback)
+  if (_injected) {
+    // [PERF-DASH] โหมด cache-first รอบแรก: ใช้ข้อมูลจาก cache ไม่ยิง GAS (ไม่สด · ไม่เขียนทับ cache/TTL เดิม)
+    dash = _injected; _dashFresh = false;
+  } else
   try {
     dash = await dbCallRaw('getDashboard', { uid });
     _dashFresh = !!dash;
@@ -36449,7 +36516,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // loadDashboard — ดึง balance/profile/earnContracts/tradeHistory จาก GAS
       (async () => {
         try {
-          const dash = await loadDashboard();
+          const dash = await loadDashboard({ cacheFirst: true }); // [PERF-DASH] boot: แสดงจาก cache ก่อน แล้วรีเฟรชสดเบื้องหลัง
           console.warn('[DB] Dashboard ready | Queue:', QUEUE._q.length, 'pending');
           // render earnContracts ทันทีที่ dashboard เสร็จ ไม่รอ loadOfflineState ทั้งก้อน
           if (typeof renderEarnContracts === 'function') renderEarnContracts();
@@ -36472,6 +36539,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     console.warn('[DB] Boot complete — dashboard:', _dashSettled.status,
       '| offline:', _offlineSettled.status);
+    // [PERF-COMM 2026-11-13] preload ข้อมูล Commission เบื้องหลังหลัง boot เสร็จ — ผู้ใช้เปิดแท็บ Commission แล้วเห็นข้อมูลทันที
+    // (silent = ไม่ขึ้น toast ถ้าล้มเหลว · มี guard _commTabLoading/throttle ในฟังก์ชันอยู่แล้ว)
+    setTimeout(() => {
+      try { if (typeof astRenderCommissionTab === 'function') astRenderCommissionTab({ silent: true }); } catch (_e) {}
+    }, 1500);
   })();
 
   setTimeout(snapshotPortfolio, 5000);
