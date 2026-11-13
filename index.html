@@ -33704,7 +33704,7 @@ const TCC_D1_PATH = '/api/member/read';
 const _D1_TIMEOUT_MS = 8000;
 const _D1_PROXY_TIMEOUT_MS = 12000;
 const _D1_MODE_KEY = 'tcc_d1_mode';
-const _D1_MODE_RECHECK_MS = 6 * 3600 * 1000;
+const _D1_MODE_RECHECK_MS = 10 * 60 * 1000;   // [PERF-D1] เดิม 6 ชม. — โหมด proxy (ผ่าน GAS) ช้ากว่าตรง ~500ms+ ต่อคำขอ → ลองเข้า Worker ตรงใหม่ทุก 10 นาที (เดิมถ้าเคยพลาดครั้งเดียวจะติด proxy ทั้งวัน)
 const _D1_WTS_KEY = 'tcc_d1_wts_v1';
 const _D1_OFF_KEY = 'tcc_d1_off';
 const _D1_READ = Object.assign(Object.create(null), { getOpenPositions: 'positions', getOpenOrders: 'orders', getMyLoans: 'loans', getMyMessages: 'messages', getFilteredTransactions: 'tx',
@@ -33734,6 +33734,9 @@ const _D1_WRITE_GROUPS = Object.assign(Object.create(null), {
 const _D1_NO_MONEY = Object.assign(Object.create(null), {
   uploadImage: 1, updateRefreshTimestamp: 1, snapshotPortfolio: 1, markMessageRead: 1, markAllMessagesRead: 1,
   assignDepositWallet: 1, updateTpsl: 1, updateFuturesTpSl: 1,
+  // [D1-R V1.4 FIX] งานซิงก์ตอนเปิดแอป/เขียนล็อก — ตรวจโค้ด GAS แล้วเขียนแค่ OpenOrders / EarnContracts / Trades / FundingFees (ไม่แตะ Users, CommissionLedger, Transactions)
+  //   เดิมถูกนับว่ากระทบ bal+comm → ทุกครั้งที่เปิดแอป (syncOfflineEngine) ทำให้ยอดเงิน/Commission ต้องถอยไป GAS นาน ~1-2 นาที (WRITE_UNCERTAIN/INFLIGHT)
+  syncOpenOrders: 1, syncEarnContracts: 1, updateEarnContract: 1, logTrade: 1, logFunding: 1,
 });
 function _d1WriteGroups(action) {
   if (action === 'issueSession' || action === 'workerProxy' || /^(get|check|export)[A-Z]/.test(action)) return null;   // ไม่ใช่การเขียน
@@ -33856,6 +33859,7 @@ async function _d1TryRead(action, data) {
     try { r = await _d1Fetch(mode, bodyStr, token); }
     catch (e1) {
       if (mode === 'direct') {   // เข้า Worker ตรงไม่ได้ → ลองผ่าน GAS แล้วจำโหมด (เหมือน tcApi)
+        console.info('[D1] เข้า Worker ตรงไม่ได้ (' + (e1 && e1.message) + ') — มักเกิดจาก CORS (ALLOWED_ORIGINS ไม่มี origin หน้าเว็บนี้) หรือเครือข่ายบล็อก *.workers.dev');   // [PERF-DIAG]
         try { r = await _d1Fetch('proxy', bodyStr, token); _d1ModeSet('proxy'); console.info('[D1] เข้า Worker ตรงไม่ได้ → ใช้โหมดผ่าน GAS'); }
         catch (e2) { _d1Pause('*', 60000); _d1Fb('NET'); return null; }
       } else { _d1Pause('*', 60000); _d1Fb('NET'); return null; }
