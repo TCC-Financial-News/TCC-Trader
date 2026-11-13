@@ -32747,7 +32747,7 @@ async function autoLoginFromMembers() {
       (session.memberStatus || '').toLowerCase().includes(s.toLowerCase())
     );
     if (typeof dbWrite === 'function') {
-      dbWrite('upsertUser', {
+      const _bootUp = {
         uid,
         username:   session.username  || USER_PROFILE.username  || '',
         email:      USER_PROFILE.regEmail || '',
@@ -32759,7 +32759,26 @@ async function autoLoginFromMembers() {
         id_type:    USER_PROFILE.idType    || '',
         id_number:  USER_PROFILE.idNumber  || '',
         address:    USER_PROFILE.address   || '',
-      });
+      };
+      // [D1-R V1.5] upsertUser เขียนแถว Users (updated_at ใหม่ทุกครั้ง) → กลุ่ม bal+comm ต้องอ่านจาก GAS จน D1 ซิงก์รอบถัดไป (~2 นาที) ⇒ getDashboardLite/getMemberDashboard ใช้ D1 ไม่ได้ทุกครั้งที่เปิดแอป
+      //   ข้ามการเขียนถ้าข้อมูลโปรไฟล์เหมือนครั้งที่เขียนสำเร็จล่าสุด (ภายใน 24 ชม.) · เปลี่ยนข้อมูล/ครบ 24 ชม./ยังไม่เคยเขียน = เขียนตามเดิม · เก็บเป็น hash ไม่เก็บข้อมูลส่วนตัวซ้ำ
+      let _bootKey = '', _bootSig = '', _bootSkip = false;
+      try {
+        _bootKey = 'tcc_boot_upsert_' + String(uid).trim().toLowerCase();
+        const _s = JSON.stringify(_bootUp); let _h = 5381;
+        for (let _i = 0; _i < _s.length; _i++) _h = ((_h * 33) ^ _s.charCodeAt(_i)) >>> 0;
+        _bootSig = _h + ':' + _s.length;
+        const _prev = JSON.parse(localStorage.getItem(_bootKey) || 'null');
+        if (_prev && _prev.s === _bootSig && (Date.now() - Number(_prev.t || 0)) < 24 * 3600 * 1000) _bootSkip = true;
+      } catch (_e) { _bootSkip = false; }
+      if (_bootSkip) {
+        console.info('[D1] ข้าม upsertUser ตอนเปิดแอป — ข้อมูลโปรไฟล์ไม่เปลี่ยน');
+      } else {
+        const _bp = dbWrite('upsertUser', _bootUp);
+        if (_bp && typeof _bp.then === 'function') _bp.then(r => {
+          if (r) { try { localStorage.setItem(_bootKey, JSON.stringify({ s: _bootSig, t: Date.now() })); } catch (_e) {} }
+        }).catch(() => {});
+      }
     }
   }, 1500);
 }
@@ -33718,7 +33737,7 @@ const _D1_WRITE_GROUPS = Object.assign(Object.create(null), {
   upsertUser: [], uploadImage: [], updateRefreshTimestamp: [], snapshotPortfolio: [], logTrade: [], logFunding: [],
   syncEarnContracts: [], updateEarnContract: [], updateFuturesTpSl: [], assignDepositWallet: [],
   // positions / orders / messages
-  updateTpsl: ['positions'], cancelOrder: ['orders'], markOrderFilled: ['orders'], syncOpenOrders: ['orders', 'tx'],
+  updateTpsl: ['positions'], cancelOrder: ['orders'], markOrderFilled: ['orders'], syncOpenOrders: ['orders'] /* [D1-R V1.5] ตรวจ GAS แล้ว: เขียนแค่ชีต OpenOrders ไม่แตะ Transactions */,
   markMessageRead: ['messages'], markAllMessagesRead: ['messages'],
   // transactions
   logTransaction: ['tx'], openFuturesPosition: ['tx'], closeFuturesPosition: ['tx'], placeFuturesOrder: ['tx'], cancelFuturesOrder: ['tx'],
@@ -33789,7 +33808,7 @@ function _d1Pause(key, ms) { _d1Paused[key] = Date.now() + ms; }
 function _d1IsPaused(action) { const n = Date.now(); return (_d1Paused['*'] || 0) > n || (_d1Paused[action] || 0) > n; }
 const _d1Stat = { d1: 0, gas: 0, fb: {}, last: '' };
 let _d1LogN = 0;
-function _d1Fb(code) { _d1Stat.fb[code] = (_d1Stat.fb[code] || 0) + 1; _d1Stat.last = code; if (_d1LogN++ < 12) console.info('[D1] ถอยไปอ่าน GAS · เหตุผล:', code); }   // [PERF-DIAG] เห็นสาเหตุใน Console ว่าทำไมไม่ได้ใช้ D1
+function _d1Fb(code, action) { const _k = action ? action + ':' + code : code; _d1Stat.fb[_k] = (_d1Stat.fb[_k] || 0) + 1; _d1Stat.last = code; if (_d1LogN++ < 60) console.info('[D1] ถอยไปอ่าน GAS · เหตุผล:', code, action ? '· ' + action : ''); }   // [PERF-DIAG] เห็นสาเหตุใน Console ว่าทำไมไม่ได้ใช้ D1
 function _d1Mode() {
   try { const o = JSON.parse(localStorage.getItem(_D1_MODE_KEY) || 'null'); if (o && o.m === 'proxy' && Date.now() - o.t < _D1_MODE_RECHECK_MS) return 'proxy'; } catch (e) {}
   return 'direct';
@@ -33845,14 +33864,14 @@ async function _d1TryRead(action, data) {
     const uid = _d1Uid();
     if (!uid) return null;
     if (data && data.uid !== undefined && data.uid !== null && String(data.uid).trim().toLowerCase() !== uid.toLowerCase()) return null;   // ขอข้อมูลของคนอื่น = ให้ GAS ตัดสิน
-    if ((_d1Inflight[group] || 0) > 0) { _d1Fb('WRITE_INFLIGHT'); return null; }
+    if ((_d1Inflight[group] || 0) > 0) { _d1Fb('WRITE_INFLIGHT', action); return null; }
     const S = _d1WGet(), now = Date.now();
-    if ((S.d[group] || 0) > now) { _d1Fb('WRITE_UNCERTAIN'); return null; }
+    if ((S.d[group] || 0) > now) { _d1Fb('WRITE_UNCERTAIN', action); return null; }
     const token = _tccGetToken();
     if (!token) return null;
     const params = Object.assign({}, data || {}); delete params.uid; delete params._fresh;
     const bodyStr = JSON.stringify({ action: action, params: params, min_synced: S.w[group] || 0 });
-    if (bodyStr.length > 18000) { _d1Fb('TOO_LARGE'); return null; }
+    if (bodyStr.length > 18000) { _d1Fb('TOO_LARGE', action); return null; }
 
     const mode = _d1Mode();
     let r = null;
@@ -33861,25 +33880,25 @@ async function _d1TryRead(action, data) {
       if (mode === 'direct') {   // เข้า Worker ตรงไม่ได้ → ลองผ่าน GAS แล้วจำโหมด (เหมือน tcApi)
         console.info('[D1] เข้า Worker ตรงไม่ได้ (' + (e1 && e1.message) + ') — มักเกิดจาก CORS (ALLOWED_ORIGINS ไม่มี origin หน้าเว็บนี้) หรือเครือข่ายบล็อก *.workers.dev');   // [PERF-DIAG]
         try { r = await _d1Fetch('proxy', bodyStr, token); _d1ModeSet('proxy'); console.info('[D1] เข้า Worker ตรงไม่ได้ → ใช้โหมดผ่าน GAS'); }
-        catch (e2) { _d1Pause('*', 60000); _d1Fb('NET'); return null; }
-      } else { _d1Pause('*', 60000); _d1Fb('NET'); return null; }
+        catch (e2) { _d1Pause('*', 60000); _d1Fb('NET', action); return null; }
+      } else { _d1Pause('*', 60000); _d1Fb('NET', action); return null; }
     }
     const st = r && r.status, b = r && r.body;
     if (st !== 200 || !b || typeof b !== 'object') {
-      _d1Fb('HTTP_' + st);
+      _d1Fb('HTTP_' + st, action);
       if (st === 404 || st === 405) _d1Pause('*', 300000);          // Worker ยังไม่ใช่เวอร์ชันที่มีเส้นทางนี้
       else if (st === 429) _d1Pause('*', 60000);
       else _d1Pause(action, 60000);
       return null;
     }
     if (b.status === 'ok') {
-      if (!_d1ShapeOk(action, b.data)) { _d1Fb('BAD_SHAPE'); _d1Pause(action, 60000); return null; }
+      if (!_d1ShapeOk(action, b.data)) { _d1Fb('BAD_SHAPE', action); _d1Pause(action, 60000); return null; }
       _d1Stat.d1++;
-      if (_d1LogN++ < 12) console.info('[D1] อ่านจาก D1 สำเร็จ:', action, (b.ms != null ? b.ms + 'ms' : ''));
+      if (_d1LogN++ < 60) console.info('[D1] อ่านจาก D1 สำเร็จ:', action, (b.ms != null ? b.ms + 'ms' : ''));
       return { data: b.data };
     }
     const code = String(b.code || 'UNKNOWN');
-    _d1Fb(code);
+    _d1Fb(code, action);
     if (code === 'DISABLED') _d1Pause('*', 300000);
     else if (code === 'AUTH') _d1Pause('*', 120000);
     else if (code === 'RATE_LIMIT') _d1Pause('*', 60000);
@@ -33889,7 +33908,7 @@ async function _d1TryRead(action, data) {
     else _d1Pause(action, 60000);
     return null;
   } catch (e) {
-    try { _d1Fb('EXC'); _d1Pause('*', 60000); } catch (_e) {}
+    try { _d1Fb('EXC', action); _d1Pause('*', 60000); } catch (_e) {}
     return null;
   }
 }
