@@ -619,12 +619,18 @@ window.addEventListener('message', function(ev) {
 // ════════════════════════════════════════════════════════════════
 
 // ⚠️ แทนที่ด้วย GAS Web App URL เดียวกับที่ index.html ใช้ (SCRIPT_URL)
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwocCEr-mQu6esBJBRRElo68Y2GLPJryhAShi9FSm__G9mD0TV5oa9IAa8cFxBn_GlILw/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwaQ6yFOEADbDirYx6RwlvzPMmDRR3HX0WM8YsfHzmfrUIouSbEX1uaa2SDOAKEWm84Tg/exec';   // [FIX-AUTH-URL] ต้องเป็น deployment เดียวกับ index.html — เดิมชี้ AKfycbwocCEr... (คนละตัว) ทำให้ token ที่ index ออกให้ถูก GAS อีกตัวปฏิเสธ (token ไม่ถูกต้อง) เฉพาะบัญชีที่ไม่ได้อ่านผ่าน D1
 
 // [AUTH+D1 v1.0] member2 เป็น iframe same-origin กับ index.html → ใช้ session token ชุดเดียวกัน (localStorage 'tcc_login_session')
 //   เดิมส่ง { action, data } ไม่มี token → GAS Main ตอบ "[AUTH] UNAUTHORIZED (ไม่พบ session token)" ทุก action
 function _m2Sess() { try { return JSON.parse(localStorage.getItem('tcc_login_session') || 'null'); } catch (e) { return null; } }
-function _m2Token() { const s = _m2Sess(); if (!s || !s.token) return ''; if (s.tokenExp && Date.now() >= s.tokenExp - 60000) return ''; return s.token; }
+function _m2TokenUid(t) { try { let p = String(t || '').split('.')[0].replace(/-/g, '+').replace(/_/g, '/'); while (p.length % 4) p += '='; const j = JSON.parse(atob(p)); return j && j.u ? String(j.u).trim() : ''; } catch (e) { return ''; } }
+function _m2Token() {
+  const s = _m2Sess(); if (!s || !s.token) return '';
+  const tu = _m2TokenUid(s.token); if (tu && s.uid && tu.toLowerCase() !== String(s.uid).trim().toLowerCase()) return '';   // token ผิดบัญชี = ถือว่าไม่มี → ขอใหม่จาก index
+  if (s.tokenExp && Date.now() >= s.tokenExp - 60000) return '';
+  return s.token;
+}
 async function _m2EnsureToken(force) {
   if (!force && _m2Token()) return _m2Token();
   try { if (window.parent && window.parent !== window && typeof window.parent._tccEnsureSession === 'function') await window.parent._tccEnsureSession(!!force); } catch (e) {}   // ให้ index ออก token ใหม่ (same-origin)
