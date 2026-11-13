@@ -33666,9 +33666,36 @@ function dbCallRaw(action, data = {}) {
 // ══════════════════════════════════════════════════════════════════
 function _tccSessRead() { try { const r = localStorage.getItem('tcc_login_session'); return r ? JSON.parse(r) : null; } catch (e) { return null; } }
 function _tccSessWrite(o) { try { localStorage.setItem('tcc_login_session', JSON.stringify(o)); } catch (e) {} }
+// [AUTH-BIND v1.6] uid ที่อยู่ใน token (อ่าน payload เฉยๆ ไม่ตรวจลายเซ็น — ฝั่ง GAS/Worker ตรวจเอง) · ใช้กัน token ของบัญชีเก่าติดมากับ session ของบัญชีใหม่
+function _tccTokenUid(t) {
+  try {
+    let p = String(t || '').split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+    while (p.length % 4) p += '=';
+    const j = JSON.parse(atob(p));
+    return j && j.u ? String(j.u).trim() : '';
+  } catch (e) { return ''; }
+}
+function _tccTokenMatchesUid(s) {
+  const tu = _tccTokenUid(s && s.token);
+  return !tu || !s || !s.uid || tu.toLowerCase() === String(s.uid).trim().toLowerCase();   // อ่านไม่ออก = ไม่ขัดขวาง (พฤติกรรมเดิม)
+}
+// ตรวจสถานะ session จาก Console: tccAuthDiag() — ไม่เปิดเผย token เต็ม
+window.tccAuthDiag = function () {
+  const s = _tccSessRead() || {}, now = Date.now();
+  let wk = null; try { wk = JSON.parse(sessionStorage.getItem('tcc_member') || 'null'); } catch (e) {}
+  return {
+    session_uid: s.uid || null, has_passHash: !!s.passHash, has_token: !!s.token,
+    token_uid: s.token ? (_tccTokenUid(s.token) || '(อ่านไม่ได้)') : null, token_matches_session: s.token ? _tccTokenMatchesUid(s) : null,
+    token_expires_in_min: s.tokenExp ? Math.round((s.tokenExp - now) / 60000) : null,
+    remember_me: _lgGetRemember(), saved_age_min: s.savedAt ? Math.round((now - s.savedAt) / 60000) : null,
+    worker_token_present: !!(wk && wk.token), worker_token_expires_in_min: wk && wk.exp ? Math.round((wk.exp - now) / 60000) : null,
+    worker_token_uid: wk ? wk.bnbId : null, profile_uid: (typeof USER_PROFILE !== 'undefined' && USER_PROFILE) ? USER_PROFILE.uid : null,
+  };
+};
 function _tccGetToken() {
   const s = _tccSessRead();
   if (!s || !s.token) return '';
+  if (!_tccTokenMatchesUid(s)) return '';   // [AUTH-BIND] token ไม่ใช่ของ uid ใน session → ถือว่าไม่มี → ขอใหม่ (ไม่ส่ง token ผิดบัญชีไป GAS/Worker)
   if (s.tokenExp && Date.now() >= s.tokenExp - 60000) return ''; // ใกล้หมดอายุ (<1 นาที) → ขอใหม่
   return s.token;
 }
@@ -33681,27 +33708,32 @@ function _tccSessionLost() {
   try { if (typeof showToast === 'function') showToast(tccT('wk_session_exp')); } catch (e) {}
   try { _lgClearSession(); } catch (e) {}
 }
-let _tccEnsureP = null;
+let _tccEnsureP = null, _tccEnsureUid = '';
 // [PROXY v1] ยืนยันตัวตนให้ GAS ด้วย member token ของ Worker (workerToken) — GAS ถาม Worker แบบ server-to-server
 //            เซสชันเก่าที่ยังเก็บ passHash ใช้ทางเดิมต่อได้ (GAS ตรวจกับ Worker ด้วย hash เดิม)
 function _tccEnsureSession(force, workerToken) {
   if (!force && _tccGetToken()) return Promise.resolve(true);
-  if (_tccEnsureP) return _tccEnsureP; // request พร้อมกันตอน boot ใช้ promise เดียว
+  { const _s0 = _tccSessRead(); if (_tccEnsureP && _tccEnsureUid === String((_s0 && _s0.uid) || '').trim().toLowerCase()) return _tccEnsureP; }   // [AUTH-BIND] ใช้ promise ร่วมเฉพาะ uid เดียวกัน (สลับบัญชีระหว่างรอ = ห้ามใช้ผลของบัญชีเก่า)
+  // request พร้อมกันตอน boot ใช้ promise เดียว
   const s = _tccSessRead();
   const wt = workerToken || (typeof tcWkToken === 'function' ? tcWkToken() : '');
   if (!s || !s.uid || (!s.passHash && !wt)) return Promise.resolve(false);
   let remember = false; try { remember = localStorage.getItem('tcc_remember_me') === '1'; } catch (e) {}
   const _issueData = wt ? { uid: s.uid, workerToken: wt, remember } : { uid: s.uid, passHash: s.passHash, remember };
+  _tccEnsureUid = String(s.uid).trim().toLowerCase();
+  const _forUid = _tccEnsureUid;
   _tccEnsureP = _dbCallRawOnce('issueSession', _issueData)
     .then(r => {
       if (!r || !r.token) return false;
       const cur = _tccSessRead() || s;
+      if (String(cur.uid || '').trim().toLowerCase() !== _forUid) { console.warn('[auth] ทิ้ง token ที่ออกให้บัญชีเก่า (สลับบัญชีระหว่างรอ)'); return false; }   // [AUTH-BIND]
+      { const tu = _tccTokenUid(r.token); if (tu && tu.toLowerCase() !== _forUid) { console.warn('[auth] token ที่ได้ไม่ตรง uid ที่ขอ — ไม่บันทึก'); return false; } }
       cur.token = r.token; cur.tokenExp = r.exp_ms || 0;
       _tccSessWrite(cur);
       return true;
     })
     .catch(e => { console.warn('[auth] issueSession failed:', e && e.message); return false; })
-    .finally(() => { _tccEnsureP = null; });
+    .finally(() => { if (_tccEnsureUid === _forUid) _tccEnsureP = null; });
   return _tccEnsureP;
 }
 
@@ -35830,12 +35862,15 @@ async function _loadOfflineStateCore() {
                     : ((typeof USER_PROFILE !== 'undefined' && USER_PROFILE.uid) ? USER_PROFILE.uid : '');
     if (!uid) {
       // [v7 FIX] ถ้า uid ยังไม่พร้อม retry หลัง 3 วิ แทนที่จะ skip ทิ้ง
+      window._losUidRetry = (window._losUidRetry || 0) + 1;
+      if (window._losUidRetry > 10) { console.warn('[OfflineEngine] loadOfflineState: ไม่มี session หลังลอง 10 ครั้ง — หยุด (ต้องเข้าสู่ระบบใหม่)'); return; }   // [AUTH-BIND] เดิมวนทุก 3 วิไม่รู้จบเมื่อ session ถูกล้าง
       console.warn('[OfflineEngine] loadOfflineState: uid not ready, retry in 3s...');
       setTimeout(() => {
         if (typeof loadOfflineState === 'function') loadOfflineState();
       }, 3000);
       return;
     }
+    window._losUidRetry = 0;
 
     // [v10 FIX] แจ้ง backend ว่า client กำลัง refresh — ป้องกัน race condition
     // backend ใช้ timestamp นี้เพื่อกัน stale GAS Engine ทับ state ใหม่
