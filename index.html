@@ -33848,7 +33848,7 @@ async function _d1Fetch(mode, bodyStr, token) {
     }
     const r = await fetch(TCC_D1_URL + TCC_D1_PATH, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: bodyStr, signal: ctrl.signal, cache: 'no-store',
+      body: bodyStr, signal: ctrl.signal,   /* [PERF-D1 v1.6] ไม่ใช้ cache:'no-store' — Chrome จะข้าม preflight cache และยิง OPTIONS ทุกครั้ง (Worker ส่ง Cache-Control: no-store มาเองแล้ว) */
     });
     return { status: r.status, body: await r.json().catch(() => null) };
   } catch (e) {
