@@ -17323,11 +17323,32 @@ setInterval(astUpdateTime, 30000);
 // ผลลัพธ์เดิม: timeout storm ซ้อนกัน error ท่วม console
 // แก้: ถ้ามี request อยู่ระหว่างทาง → skip รอบนี้ทันที
 let _astRefreshInFlight = false;
-async function _astRefreshBalanceIfStale() {
+let _astPollN = 0;
+async function _astRefreshBalanceIfStale(force) {
   if (_astRefreshInFlight) return; // [FIX-POLL-LOCK] skip ถ้า request ก่อนยังไม่เสร็จ
   if (typeof USER_PROFILE === 'undefined') return;
   const uid = USER_PROFILE.uid;
   if (!uid) return;
+  // [PERF-REFRESH 2026-11-13] มี getDashboard เต็มกำลังโหลดอยู่ (boot/รีเฟรช) → ไม่ยิงซ้อน (GAS ตอบทีละคำขอ ซ้อนแล้วช้าทุกตัว)
+  if (typeof _dashFullInflight !== 'undefined' && _dashFullInflight > 0) return;
+  // [PERF-REFRESH] poll ทุก 30 วิ: ลองยอดสดจาก D1 ก่อน (อ่านแถวเดียว) — ได้ผลก็ข้าม getDashboard เต็ม · ยิงเต็มทุกรอบที่ 5 (~2.5 นาที) หรือเมื่อ force/D1 ใช้ไม่ได้
+  if (!force && ((++_astPollN) % 5) !== 0 && typeof _d1TryRead === 'function') {
+    _astRefreshInFlight = true;
+    try {
+      const r = await _d1TryRead('getDashboardLite', {});
+      if (r && r.data && r.data.user && r.data.user.main_balance !== undefined) {
+        const nb = parseFloat(r.data.user.main_balance);
+        if (!isNaN(nb)) {
+          mainWalletBalance = nb;
+          if (typeof updateSysWalletDisplay === 'function') updateSysWalletDisplay();
+          if (typeof updateOverviewBalances === 'function') updateOverviewBalances();
+        }
+        _astRefreshInFlight = false;
+        return;
+      }
+    } catch (_e) { /* ตกไปทาง GAS ด้านล่าง */ }
+    _astRefreshInFlight = false;
+  }
   _astRefreshInFlight = true; // [FIX-POLL-LOCK] ล็อก
   const cacheKey = 'dash_' + uid;
 
@@ -33764,7 +33785,8 @@ const _d1Paused = {};   // '*' = ทุก action · หรือชื่อ ac
 function _d1Pause(key, ms) { _d1Paused[key] = Date.now() + ms; }
 function _d1IsPaused(action) { const n = Date.now(); return (_d1Paused['*'] || 0) > n || (_d1Paused[action] || 0) > n; }
 const _d1Stat = { d1: 0, gas: 0, fb: {}, last: '' };
-function _d1Fb(code) { _d1Stat.fb[code] = (_d1Stat.fb[code] || 0) + 1; _d1Stat.last = code; }
+let _d1LogN = 0;
+function _d1Fb(code) { _d1Stat.fb[code] = (_d1Stat.fb[code] || 0) + 1; _d1Stat.last = code; if (_d1LogN++ < 12) console.info('[D1] ถอยไปอ่าน GAS · เหตุผล:', code); }   // [PERF-DIAG] เห็นสาเหตุใน Console ว่าทำไมไม่ได้ใช้ D1
 function _d1Mode() {
   try { const o = JSON.parse(localStorage.getItem(_D1_MODE_KEY) || 'null'); if (o && o.m === 'proxy' && Date.now() - o.t < _D1_MODE_RECHECK_MS) return 'proxy'; } catch (e) {}
   return 'direct';
@@ -33849,6 +33871,7 @@ async function _d1TryRead(action, data) {
     if (b.status === 'ok') {
       if (!_d1ShapeOk(action, b.data)) { _d1Fb('BAD_SHAPE'); _d1Pause(action, 60000); return null; }
       _d1Stat.d1++;
+      if (_d1LogN++ < 12) console.info('[D1] อ่านจาก D1 สำเร็จ:', action, (b.ms != null ? b.ms + 'ms' : ''));
       return { data: b.data };
     }
     const code = String(b.code || 'UNKNOWN');
@@ -34260,6 +34283,16 @@ function _invalidateDashCache() {
 //   มี cache 'dash_<uid>' ใน localStorage (แม้หมดอายุ) → แสดงยอด/ข้อมูลจาก cache ทันที แล้วดึง GAS เบื้องหลังมาทับเมื่อได้ข้อมูลสด
 //   ไม่มี cache → ทำงานเหมือนเดิม (รอ GAS) · การเรียกอื่นทั้งหมด (หลังเทรด/โอน/รีเฟรช) ไม่ส่ง opts → GAS-first เหมือนเดิมทุกประการ
 //   ข้อมูลจาก cache ถูกประมวลผลแบบ "ไม่สด" (_dashFresh=false) → ตัวกันข้อมูลเก่าเดิม (setDirectWalletBalance ฯลฯ) ทำงานตามปกติ
+// [PERF-REFRESH 2026-11-13] ตัวนับ getDashboard เต็มที่กำลังโหลด + เวลาที่โหลดเต็มเสร็จล่าสุด — ให้ poll/ปุ่มรีเฟรชไม่ยิง getDashboard (หนักสุด) ซ้อนกัน
+let _dashFullInflight = 0;
+let _lastFullDashMs = 0;
+function _loadDashFull() {
+  _dashFullInflight++;
+  return _loadDashboardImpl(null).finally(() => { _dashFullInflight = Math.max(0, _dashFullInflight - 1); _lastFullDashMs = Date.now(); });
+}
+// opts.cacheFirst = true (boot / ปุ่มรีเฟรช): แสดงจาก cache (แม้หมดอายุ) ทันที → ยอดสดจาก D1 (getDashboardLite) → GAS getDashboard เต็มทำเบื้องหลัง
+// opts.fast = true (ปุ่มรีเฟรช): คืนผลทันทีที่ D1 ให้ยอดสดได้ (ไม่รอ GAS เต็ม) · D1 ใช้ไม่ได้ (ปิด/ไม่สด/มีการเขียนค้าง) → รอ GAS เต็มเหมือนเดิม
+// ไม่ส่ง opts = GAS-first เหมือนเดิมทุกประการ (ใช้หลังเทรด/โอน)
 async function loadDashboard(opts) {
   if (opts && opts.cacheFirst === true) {
     let _cd = null;
@@ -34269,21 +34302,27 @@ async function loadDashboard(opts) {
       const _c0 = LS.get('dash_' + _u0);
       if (_c0 && _c0.data && _c0.data.user) _cd = _c0.data;
     } catch (_e) { _cd = null; }
-    // [PERF-D1 2026-11-13] ยอดเงินจาก D1 (getDashboardLite: Users + SpotCoinBalances — อ่านแถวเดียว ไม่สแกนชีต) ขึ้นก่อน getDashboard ของ GAS
-    //   ใช้เฉพาะถ้า GAS ยังตอบไม่เสร็จ (กันข้อมูลจาก D1 ที่เก่ากว่าไปทับข้อมูลสดจาก GAS) · D1 ปิด/ไม่สด/ล้มเหลว → _d1TryRead คืน null = ใช้ cache/GAS ตามเดิม
     let _gasDone = false;
     if (_cd) { try { await _loadDashboardImpl(_cd); } catch (_e) { console.warn('[loadDashboard] cache render error:', _e && _e.message); } }
-    try {
-      if (typeof _d1TryRead === 'function') {
-        _d1TryRead('getDashboardLite', {}).then(r => {
-          if (r && r.data && !_gasDone) _loadDashboardImpl(r.data).catch(e => console.warn('[loadDashboard] D1 lite apply error:', e && e.message));
-        }).catch(() => {});
-      }
-    } catch (_e) {}
-    // รีเฟรชสดจาก GAS เบื้องหลัง — ผลสดจะทับยอดจาก cache/D1 เมื่อมาถึง
-    return _loadDashboardImpl(null).finally(() => { _gasDone = true; });
+    // GAS เต็มเริ่มทันทีเบื้องหลัง · ผลสดจะทับยอดจาก cache/D1 เมื่อมาถึง
+    const _full = _loadDashFull().finally(() => { _gasDone = true; });
+    // ยอดเงินจาก D1 — ใช้เฉพาะถ้า GAS ยังตอบไม่เสร็จ (กันข้อมูล D1 ที่เก่ากว่าไปทับข้อมูลสดจาก GAS)
+    let _liteData = null;
+    const _liteP = (async () => {
+      try {
+        if (typeof _d1TryRead !== 'function') return;
+        const r = await _d1TryRead('getDashboardLite', {});
+        if (r && r.data && !_gasDone) { await _loadDashboardImpl(r.data); _liteData = r.data; }
+      } catch (e) { console.warn('[loadDashboard] D1 lite error:', e && e.message); }
+    })();
+    if (opts.fast === true) {
+      _full.catch(() => {});
+      await _liteP;
+      if (_liteData) return _liteData;   // ได้ยอดสดจาก D1 แล้ว — GAS เต็มทำต่อเบื้องหลัง
+    }
+    return _full;
   }
-  return _loadDashboardImpl(null);
+  return _loadDashFull();
 }
 
 async function _loadDashboardImpl(_injected) {
@@ -38049,6 +38088,12 @@ function clearAllStaleCache() {
         const isSessionData = (typeof SESSION_CACHE_KEYS !== 'undefined') &&
           SESSION_CACHE_KEYS.some(prefix => k.startsWith('tcc_' + prefix));
         const isExpired = v && v._exp && v._exp < now;
+        // [PERF-REFRESH 2026-11-13] cache ยอด/Commission: ไม่ลบ แต่ทำเครื่องหมายหมดอายุ (_exp=1) → getIfFresh/dbRead ยังบังคับดึงใหม่ตามเจตนาเดิม
+        //   แต่ LS.get() ยังอ่านได้ → หน้าจอแสดงข้อมูลเดิมทันทีระหว่างรอข้อมูลสด (ไม่ขึ้น 0.00/⏳)
+        if (isSessionData && v && typeof v === 'object' && /^tcc_(dash_|commdash_|commref_)/.test(k)) {
+          v._exp = 1; localStorage.setItem(k, JSON.stringify(v));
+          return;
+        }
         if (isSessionData || isExpired) localStorage.removeItem(k);
       } catch { localStorage.removeItem(k); }
     });
@@ -38111,7 +38156,7 @@ async function softRefreshCurrentPage() {
     //   - loadOpenPositionsWithDD ต้องรันหลัง loadOfflineState (ใช้ earnContracts/positions ที่เพิ่ง sync) → ต่อท้ายสายเดียวกัน
     //   - fetchAllMids ยิง Hyperliquid ไม่เกี่ยวกับ GAS → ขนานได้เลย
     const _tDash = (async () => {
-      if (typeof loadDashboard === 'function') await loadDashboard();
+      if (typeof loadDashboard === 'function') await loadDashboard({ cacheFirst: true, fast: true }); // [PERF-REFRESH] ยอดสดจาก D1 ทันที · GAS เต็มทำเบื้องหลัง
     })();
     const _tOffline = (async () => {
       await new Promise(r => setTimeout(r, 300));
@@ -38150,7 +38195,8 @@ async function softRefreshCurrentPage() {
         break;
       case 'assets':
         if (typeof updateOverviewBalances === 'function') updateOverviewBalances();
-        if (typeof _astRefreshBalanceIfStale === 'function') await _astRefreshBalanceIfStale(true);
+        // [PERF-REFRESH] loadDashboard ข้างบนโหลดยอด/ประวัติให้แล้ว — เดิมยิง getDashboard เต็มซ้ำอีกรอบ (ต่อคิว) ทำให้ช้าเป็นสองเท่า · ข้ามถ้ากำลังโหลดอยู่/เพิ่งโหลดเสร็จ
+        if (typeof _astRefreshBalanceIfStale === 'function' && _dashFullInflight === 0 && (Date.now() - _lastFullDashMs) > 15000) await _astRefreshBalanceIfStale(true);
         if (typeof astUpdateTime === 'function') astUpdateTime();
         if (typeof renderEarnContracts === 'function') renderEarnContracts();
         break;
