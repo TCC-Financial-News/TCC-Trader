@@ -33278,7 +33278,7 @@ const LS = {
   getIfFresh(key) {
     const v = LS.get(key);
     if (!v) return null;
-    if (v._exp && v._exp < Date.now()) { LS.del(key); return null; }
+    if (v._exp && v._exp < Date.now()) return null;   // [PERF-REFRESH2] ไม่ลบ cache ที่หมดอายุทิ้ง — ให้ LS.get() ยังแสดงข้อมูลเดิมระหว่างรอข้อมูลสด (เดิมรีเฟรชรอบสองเจอ cache ว่าง → โหลดใหม่หมด) · ที่เต็มจะถูก LS.evictOld() เก็บเอง
     return v;
   },
 };
@@ -34341,9 +34341,13 @@ function _invalidateDashCache() {
 // [PERF-REFRESH 2026-11-13] ตัวนับ getDashboard เต็มที่กำลังโหลด + เวลาที่โหลดเต็มเสร็จล่าสุด — ให้ poll/ปุ่มรีเฟรชไม่ยิง getDashboard (หนักสุด) ซ้อนกัน
 let _dashFullInflight = 0;
 let _lastFullDashMs = 0;
+let _dashFullP = null;
 function _loadDashFull() {
+  // [PERF-REFRESH2] กดรีเฟรชซ้ำตอนรอบก่อนยังโหลด GAS เต็มอยู่ → ใช้ promise เดิม (ไม่ต่อคิว getDashboard ซ้อนใน GAS ที่ตอบทีละคำขอ)
+  if (_dashFullP) return _dashFullP;
   _dashFullInflight++;
-  return _loadDashboardImpl(null).finally(() => { _dashFullInflight = Math.max(0, _dashFullInflight - 1); _lastFullDashMs = Date.now(); });
+  _dashFullP = _loadDashboardImpl(null).finally(() => { _dashFullInflight = Math.max(0, _dashFullInflight - 1); _lastFullDashMs = Date.now(); _dashFullP = null; });
+  return _dashFullP;
 }
 // opts.cacheFirst = true (boot / ปุ่มรีเฟรช): แสดงจาก cache (แม้หมดอายุ) ทันที → ยอดสดจาก D1 (getDashboardLite) → GAS getDashboard เต็มทำเบื้องหลัง
 // opts.fast = true (ปุ่มรีเฟรช): คืนผลทันทีที่ D1 ให้ยอดสดได้ (ไม่รอ GAS เต็ม) · D1 ใช้ไม่ได้ (ปิด/ไม่สด/มีการเขียนค้าง) → รอ GAS เต็มเหมือนเดิม
@@ -34374,6 +34378,9 @@ async function loadDashboard(opts) {
       _full.catch(() => {});
       await _liteP;
       if (_liteData) return _liteData;   // ได้ยอดสดจาก D1 แล้ว — GAS เต็มทำต่อเบื้องหลัง
+      // [PERF-REFRESH2] D1 ใช้ไม่ได้ (บัญชีที่ยังไม่เปิด D1 / ถูกเขียนไม่นาน → STALE) แต่หน้าจอแสดง cache อยู่แล้ว → ไม่ต้องรอ GAS เต็มจนจบ
+      //   รอสูงสุด 4 วิ แล้วคืนปุ่มรีเฟรช · GAS เต็มทำต่อเบื้องหลังและอัปเดตหน้าจอเองเมื่อเสร็จ (เดิมรอจนจบ 10-20 วิ ทุกครั้งที่ D1 ไม่ให้ยอด)
+      if (_cd) { await Promise.race([_full.catch(() => {}), new Promise(r => setTimeout(r, 4000))]); return _cd; }
     }
     return _full;
   }
@@ -38153,7 +38160,11 @@ function clearAllStaleCache() {
           return;
         }
         if (isSessionData || isExpired) localStorage.removeItem(k);
-      } catch { localStorage.removeItem(k); }
+      } catch {
+        // [FIX-REFRESH2] เดิมลบทุกคีย์ tcc_* ที่ไม่ใช่ JSON → ค่าธรรมดาอย่าง tcc_lang (ภาษา) / tcc_cid (รหัสเครื่อง) ถูกลบทุกครั้งที่กดรีเฟรช
+        //   ลบเฉพาะคีย์ที่เป็น cache ของเรา (SESSION_CACHE_KEYS) ที่ JSON เสีย
+        try { if (typeof SESSION_CACHE_KEYS !== 'undefined' && SESSION_CACHE_KEYS.some(prefix => k.startsWith('tcc_' + prefix))) localStorage.removeItem(k); } catch (_e) {}
+      }
     });
     // [FIX-RECOVERY] ลอง flush คำสั่งค้าง — [FIX-QUEUE-KEEP-PENDING] ลบสำเนา write queue เฉพาะเมื่อคิวว่างจริง
     _dropWriteQueueIfIdle();
