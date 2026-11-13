@@ -33657,7 +33657,7 @@ function _tccEnsureSession(force, workerToken) {
 //           ฝั่งเครื่องนี้ปิดด้วย ?d1=off (เปิดกลับ ?d1=on) · ตรวจสถานะ: tccD1Status() ใน console
 //  ไม่แตะ: dbWrite / QUEUE / _dbCallRawIdem / request_id / ตรรกะเงินใดๆ · action เงินทั้งหมดยังอยู่ที่ GAS
 // ══════════════════════════════════════════════════════════════════
-const TCC_D1_URL = '';   // ← ใส่ URL Worker "tcc-d1" เช่น https://tcc-d1.<บัญชี>.workers.dev (ไม่มี / ท้าย) · เว้นว่างไว้ก่อนจนกว่า Worker + ซิงก์พร้อม
+const TCC_D1_URL = 'https://tcc-worker-data.tcc-financial-news.workers.dev';   // ← ใส่ URL Worker "tcc-d1" เช่น https://tcc-d1.<บัญชี>.workers.dev (ไม่มี / ท้าย) · เว้นว่างไว้ก่อนจนกว่า Worker + ซิงก์พร้อม
 const TCC_D1_PATH = '/api/member/read';
 const _D1_TIMEOUT_MS = 8000;
 const _D1_PROXY_TIMEOUT_MS = 12000;
