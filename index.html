@@ -1,3 +1,19 @@
+<!-- [v1.8-OPEN-CLOSE-POLISH] (2026-11-14) index_tcc_main_nv4_V1_8 — ต่อจาก V1_7 · ใช้คู่กับ GAS_tcc_main_nv4_V1_7.gs (deploy GAS ก่อน) · ค้นด้วยแท็ก "V1_8-"
+     [V1_8-OPEN-SNAPSHOT] Futures → Direct → Open (Market) เคสที่ไม่เข้า optimistic (merge / net-reduce / net-close / flip / status เก่า): รอ response ตามเดิม แต่พอ response มา วาดจาก snapshot ที่ GAS ส่งกลับ (_futdApplyOpenResult) ทันที แทนรอ Summary รอบถัดไปอีก 2–3 วิ
+         ไม่เดา: ข้อมูลไม่ครบ/ไม่เจอ position ในเครื่อง = ไม่แตะอะไร · futdRefreshAccountStatus() ที่ยิงต่อทันที (จำนวนครั้งเท่าเดิม) ยืนยันค่าจริง และทิ้งผล poll ที่บินอยู่ก่อนหน้า (v4.13-DIRECT-FRESH)
+     [V1_8-REFRESH-ONCE] หลังเปิด/ปิด รวม refresh เป็นชุดเดียว: ตัด aftdRefreshDirectSummary() ที่เคยยิงซ้ำทันทีหลังปิด (ปิดเต็ม/ปิดบางส่วน) → futdRefreshAccountStatus ชุดเดียววาด Assets→Direct + Overview จาก cache เดียวกัน (maxAge — ไม่ยิง GAS เพิ่ม) · ปิดบางส่วน debounce 5 วิเหมือนปิดเต็ม ('skipped'/ไม่รู้จัก = ดึงทันที)
+     ไม่แตะ: สูตร PNL/Margin/Liq/Avbl · poll 15 วิ · รอบ engine · Contract · Limit order -->
+<!-- [v1.7-CONTRACT-FAST] (2026-11-14) index_tcc_main_nv4_V1_7 — ต่อจาก V1_6 · แก้เฉพาะ HTML (GAS ใช้ GAS_tcc_main_nv4_V1_6.gs ตัวเดิม) · ค้นด้วยแท็ก "vx20-"
+     [vx20-CONTRACT-PRECHECK] Futures-Contract → เปิด: ข้ามการรอ getContractStatus (+2–5 วิ) เมื่อ _contractDDMap ของสัญญานั้นสดไม่เกิน 30 วิ (_ts ประทับใน checkCanOpenPosition และ _refreshContractLiqMap หลัง commit) · ไม่มี/เก่า/ติด frozen·matured·วงเงินเต็ม = รอแบบเดิม (toast ข้อความเดิม)
+         confirm() เตือน DD เก็บไว้ (ข้อความเดิม) · เปิดสำเร็จแล้ว cache ถูกทำให้หมดอายุทันที (ออเดอร์ถัดไปรอ GAS จนกว่าสถานะสดหลัง commit จะมา) · GAS logPositionWithGuard ตรวจซ้ำใต้ lock เสมอ
+     [vx20-MERGE-ROLLBACK] GAS ปฏิเสธ order ที่ merge เข้า position เดิม → หัก size/margin/entry/lev/TP-SL ส่วนที่เพิ่มออก (เดิมลบตาม id อย่างเดียว เคส merge ไม่คืน size)
+     ไม่แตะ: สูตร margin/PNL/liq/Avbl · Futures-Direct · ฝั่ง GAS · จำนวน request ใน poll/engine (ลดลง 1 request ต่อการเปิดเมื่อ cache สด) -->
+<!-- [v1.6-OPEN-FAST] (2026-11-14) index_tcc_main_nv4_V1_6 — ต่อจาก V1_5 · ใช้คู่กับ GAS_tcc_main_nv4_V1_6.gs (deploy GAS ก่อน) · ค้นด้วยแท็ก "vx20-"
+     [vx20-OPTIMISTIC-OPEN] Futures → Direct → Open (Market): เปิด "ใหม่" วาด position ทันที ไม่รอ GAS · client ส่ง id (fpos_...) ให้ GAS · poll ไม่ลบ/ไม่ซ้ำ (FUTD._openingIds แนวเดียวกับ _closingIds) · GAS ปฏิเสธ → ลบ + คืน margin
+       เข้าเงื่อนไขเฉพาะ: status สดไม่เกิน 60 วิ · ไม่มี position symbol เดียวกัน · Avbl ในเครื่อง ≥ margin · margin ≥ 1 · ไม่มีรายการปิดค้าง — ไม่ผ่านข้อใด = เส้นทางเดิม await ทุกบรรทัด (merge/net/flip รอ response เหมือนเดิม)
+     [vx20-REFRESH-DEBOUNCE] หลังเปิด (optimistic) / ปิดเต็มสำเร็จ รวม refresh เป็นครั้งเดียว debounce 5 วิ (_futdRefreshDebounced) · ไม่ลดช่วง poll 15 วิ · ไม่เพิ่มงานในรอบ engine
+     (Contract pre-check + rollback merge ทำใน V1_7 ด้านบน)
+     ไม่แตะ: สูตร PNL/Margin/Liq/Avbl · futdSubmitOpen (legacy ไม่มีจุดเรียก) · Limit order · Contract ทั้งหมด -->
 <!-- [v1.4-DIRECT-PNL] (2026-11-14) index_tcc_main_nv4_V1_4 — ต่อจาก V1_3 · ใช้คู่กับ GAS_tcc_main_nv4_V1_4.gs (change set แยก: HTML ไม่พึ่ง GAS ใหม่ — deploy ลำดับใดก็ได้) · ค้นด้วยแท็ก "v1.4-"
      [v1.4-DIRECT-TODAY]   Assets → Futures-Direct → Today's PNL: ก่อนข้อมูลจริงมา แสดง "—" (เดิมขึ้น +$0.00 (+0.00%) เหมือนเป็นค่าจริง) · ฐาน % (futures_balance) ≤ 0 → แสดงเฉพาะจำนวนเงิน (เดิมโชว์ +0.00% ทั้งที่ขาดทุน)
      [v1.4-AFTD-HYDRATE]   สถานะ Direct ที่เก็บไว้ข้ามรีเฟรช: ประทับวัน → ข้ามวันแล้ว today_realized_pnl ของเมื่อวานไม่ถูกนับเป็นของวันนี้ (V1_3 ไม่มีตรานี้ — บั๊ก) · เก็บ Liq map ที่มาทีหลังด้วย · Est. Total Value/Today's PNL ใน Overview อ่านสถานะที่เก็บไว้ได้ทันที
@@ -14291,6 +14307,36 @@ if (_bad) { showToast(tccTF(side === 'long' ? 'sys_tpsl_bad_long' : 'sys_tpsl_ba
   }
 }
 
+// [vx20-MERGE-ROLLBACK] GAS ปฏิเสธ order ที่ merge เข้า position เดิม → หักส่วนที่เพิ่มออก (size/margin/entry/lev/TP-SL) แทนที่จะปล่อยค้าง
+//   หักเป็น "ส่วนต่าง" ไม่ restore snapshot ทั้งก้อน (กัน overwrite สิ่งที่เปลี่ยนระหว่างรอ เช่น ปิดบางส่วน/แก้ TP-SL) · position ถูกปิด/ลดจนหมดไปแล้ว → ลบออก
+function _undoContractMerge(mu) {
+  if (!mu || typeof S === 'undefined' || !Array.isArray(S.positions)) return false;
+  const ex = S.positions.find(p => p.id === mu.posId);
+  if (!ex) return false;
+  const remain = parseFloat((ex.size - mu.addSize).toFixed(8));
+  if (remain <= 0.0001) {
+    S.positions = S.positions.filter(p => p.id !== ex.id);
+  } else {
+    const prevEntry = ((ex.entry * ex.size) - (mu.price * mu.addSize)) / remain;
+    if (isFinite(prevEntry) && prevEntry > 0) ex.entry = prevEntry;
+    ex.size   = remain;
+    ex.margin = Math.max(0, (parseFloat(ex.margin) || 0) - mu.addMargin);
+    if (mu.prevLev !== undefined) ex.lev = mu.prevLev;
+    if (mu.newTp && ex.tp === mu.newTp) ex.tp = mu.prevTp;   // คืนเฉพาะที่ order นี้เป็นคนตั้ง
+    if (mu.newSl && ex.sl === mu.newSl) ex.sl = mu.prevSl;
+    ex.liq = 0;   // recalcPositions() set จาก liq_price_map ใหม่
+  }
+  try {
+    const cc = (typeof earnContracts !== 'undefined') ? earnContracts.find(c => c.contractId === ex.earnContractId) : null;
+    if (cc && typeof _refreshAvbl === 'function') _refreshAvbl(cc);
+    if (typeof renderPositions === 'function') renderPositions();
+    if (typeof renderEarnContracts === 'function') renderEarnContracts();
+    if (typeof _updatePosBadge === 'function') _updatePosBadge();
+    if (typeof _liqAfterChange === 'function') _liqAfterChange(ex.earnContractId);   // ยืนยัน Liq/สถานะสัญญากับ GAS อีกครั้ง
+  } catch (e) { console.warn('[undoContractMerge]', e && e.message); }
+  return true;
+}
+
 // ══════════════════════════════════════════════════════════════
 //  _fillOrderToPosition — สร้าง / merge Position จาก order ที่ fill แล้ว
 // ══════════════════════════════════════════════════════════════
@@ -14336,6 +14382,13 @@ function _fillOrderToPosition(order) {
   );
 
   if (existing) {
+    // [vx20-MERGE-ROLLBACK] จำค่าก่อน merge ไว้คืนเมื่อ GAS ปฏิเสธ (rollback เดิมลบตาม id ของ logOpen = id ใหม่ ไม่ตรง position เดิม → merge ไม่ถูกคืน)
+    const _undoId = _genUniqueId();
+    window._openMergeUndo = window._openMergeUndo || {};
+    window._openMergeUndo[_undoId] = {
+      posId: existing.id, addSize: amt, addMargin: margin, price: price,
+      prevLev: existing.lev, prevTp: existing.tp, prevSl: existing.sl, newTp: tp, newSl: sl
+    };
     const totalSize    = existing.size + amt;
     const avgEntry     = (existing.entry * existing.size + price * amt) / totalSize;
     const newMarginTot = existing.margin + margin;
@@ -14355,7 +14408,7 @@ function _fillOrderToPosition(order) {
     if (tp) existing.tp = tp;
     if (sl) existing.sl = sl;
     const _logOpenP = (typeof HIST !== 'undefined')
-      ? HIST.logOpen({...existing, size: amt, entry: price, lev: _orderLev, id: _genUniqueId(), fillOrderId: order.id}) // [FIX-LIMITFILL-DOUBLECOUNT] บอก GAS ว่า position นี้มาจาก order ไหน · [v4.12-MERGE-LEV] lev = ของ order ใหม่ (ไม่ใช่ lev หลัง merge)
+      ? HIST.logOpen({...existing, size: amt, entry: price, lev: _orderLev, id: _undoId, fillOrderId: order.id}) // [FIX-LIMITFILL-DOUBLECOUNT] บอก GAS ว่า position นี้มาจาก order ไหน · [vx20-MERGE-ROLLBACK] id = _undoId (ผูกกับ window._openMergeUndo) · [v4.12-MERGE-LEV] lev = ของ order ใหม่ (ไม่ใช่ lev หลัง merge)
       : null;
     // [BUGFIX] ดึง liq_price_map ใหม่หลัง logOpen เขียนเสร็จ — กัน "Liq. Price" โชว์ "—" ค้าง
     _refreshLiqAfterLogOpen(_logOpenP);
@@ -22336,6 +22389,7 @@ async function checkCanOpenPosition(earnContractId) {
       // [FIX-DD3a] เพิ่ม trading_realized_loss + apt_yield_accrued เพื่อให้ showEarnDetail อ่านได้
       window._contractDDMap = window._contractDDMap || {};
       window._contractDDMap[earnContractId] = {
+        _ts:                   Date.now(), // [vx20-CONTRACT-PRECHECK] เวลาที่ได้สถานะสดจาก GAS — placeOrder ข้ามการรอ getContractStatus ได้ถ้าไม่เกิน 30 วิ
         isFrozen:              !!st.isFrozen,
         isWarning:             !!st.isWarning,
         isMatured:             !!st.isMatured, // [FIX-GAP-1] เก็บไว้ให้ UI อื่นอ่านค่าสดชุดเดียวกัน
@@ -22437,8 +22491,10 @@ async function _refreshContractLiqMap(earnContractId, opts) {
     // [FIX-SYNC-3b] เพิ่ม avail_margin / margin_cap / isMarginBlocked ใน _contractDDMap
     // [FIX-DD3b] เพิ่ม trading_realized_loss + apt_yield_accrued
     window._contractDDMap[earnContractId] = {
+      _ts:                   Date.now(), // [vx20-CONTRACT-PRECHECK] สถานะสดจาก GAS (หลัง commit เปิด/ปิด) — ใช้เป็น cache ของ pre-check ได้ 30 วิ
       isFrozen:              !!st.isFrozen,
       isWarning:             !!st.isWarning,
+      isMatured:             !!st.isMatured, // [vx20-CONTRACT-PRECHECK] pre-check ต้องใช้ครบชุดเดียวกับ checkCanOpenPosition
       drawdown_pct:          st.drawdown_pct,
       avail_margin:          st.avail_margin,
       trade_avail_margin:    (st.trade_avail_margin !== undefined ? st.trade_avail_margin : st.avail_margin),
@@ -22577,15 +22633,38 @@ function _liqAfterChange(earnContractId, commitPromise) {
   if (commitPromise && typeof commitPromise.then === 'function') commitPromise.then(go, go); else go();
 }
 
+// [vx20-CONTRACT-PRECHECK] pre-check จาก cache (_contractDDMap) แทนการรอ getContractStatus (+2–5 วิ ทุกครั้งที่เปิด)
+//   คืน true = อนุญาต (cache สด ≤30 วิ และไม่ติด frozen/matured/วงเงินเต็ม) · false = ผู้ใช้กดยกเลิก confirm เตือน DD · null = ใช้ไม่ได้ → ผู้เรียกรอ checkCanOpenPosition แบบเดิม
+//   cache ใช้ "อนุญาต" เท่านั้น: ติด frozen/matured/วงเงินเต็ม → null → เส้นทางเดิมดึงสถานะสดแล้วแจ้ง toast ข้อความเดิม · confirm() เตือน DD เก็บไว้ (ข้อความเดิม)
+//   GAS logPositionWithGuard ยังตรวจ frozen/matured/margin cap/per-order cap ซ้ำใต้ lock เสมอ → cache เก่าผิดพลาดก็ไม่ทะลุ (โดน reject → rollback)
+const _PRECHECK_TTL_MS = 30000;
+function _checkCanOpenFromCache(earnContractId) {
+  try {
+    if (!earnContractId) return null;
+    if (!(USER_PROFILE && USER_PROFILE.uid)) return null;
+    const m = window._contractDDMap && window._contractDDMap[earnContractId];
+    if (!m || !m._ts || (Date.now() - m._ts) > _PRECHECK_TTL_MS) return null;
+    if (m.isFrozen || m.isMatured) return null;
+    if (m.margin_cap !== undefined && m.isMarginBlocked) return null;
+    if (m.isWarning) {
+      if (!confirm(tccTF('sys_dd_confirm', {dd: (m.drawdown_pct || '—')}))) return false;
+    }
+    return true;
+  } catch (e) { return null; }
+}
+
 // ── [v8] placeOrder — async guard wrapper ──────────────────────────────────
 async function placeOrder(side) {
   _setBtnLoading(side, true);
   try {
     const c = (typeof _getSelectedContract === 'function') ? _getSelectedContract() : null;
     const contractId = c ? c.contractId : (typeof selectedEarnContractId !== 'undefined' ? selectedEarnContractId : null);
-    const canOpen = await checkCanOpenPosition(contractId);
+    let canOpen = _checkCanOpenFromCache(contractId);   // [vx20-CONTRACT-PRECHECK] cache สด → ไม่รอ GAS
+    if (canOpen === null) canOpen = await checkCanOpenPosition(contractId);
     if (!canOpen) return;
     _placeOrderCore(side);
+    // [vx20-CONTRACT-PRECHECK] เปิดแล้ว margin ของสัญญาเปลี่ยน → cache นี้ไม่ใช่ค่าสดอีกต่อไป (ออเดอร์ถัดไปรอ GAS จนกว่า _refreshContractLiqMap หลัง commit จะประทับเวลาใหม่)
+    try { const _mm = window._contractDDMap && window._contractDDMap[contractId]; if (_mm) _mm._ts = 0; } catch (_e) {}
     // sync balance + drawdown หลัง place order
     if (c) {
       syncContractBalance(c);
@@ -36456,8 +36535,17 @@ HIST.logOpen = function(pos) {
   // ให้ rollback position ออกจาก S.positions ทันที ไม่รอให้ user refresh แล้วออเดอร์หาย
   // dbWrite จะ throw err ออกมาถ้าเป็น permanent error และแสดง toast ไปแล้ว
   const _savePromise = saveOpenPosition(pos);
+  // [vx20-MERGE-ROLLBACK] สำเร็จ = ล้าง undo ที่ผูกกับ id นี้ (ใช้ then 2 ทาง กัน unhandled rejection)
+  if (_savePromise && typeof _savePromise.then === 'function') {
+    _savePromise.then(() => { if (window._openMergeUndo) delete window._openMergeUndo[pos.id]; }, () => {});
+  }
   if (_savePromise && typeof _savePromise.catch === 'function') {
     _savePromise.catch(err => {
+      // [vx20-MERGE-ROLLBACK] order ที่ merge เข้า position เดิม → หักส่วนที่เพิ่มออก (id ของ logOpen ไม่อยู่ใน S.positions จึงไม่เข้า filter ด้านล่าง)
+      try {
+        const _mu = window._openMergeUndo && window._openMergeUndo[pos.id];
+        if (_mu) { delete window._openMergeUndo[pos.id]; _undoContractMerge(_mu); console.warn('[HIST.logOpen] ROLLBACK merge pos=' + _mu.posId + ' reason:', err && err.message); }
+      } catch (_muErr) { console.warn('[HIST.logOpen] ROLLBACK merge error:', _muErr && _muErr.message); }
       // rollback: เอา position นี้ออกจาก S.positions
       if (typeof S !== 'undefined' && Array.isArray(S.positions)) {
         const _before = S.positions.length;
@@ -43373,6 +43461,265 @@ function futdUpdateBalanceBar(status) {
   try { futdUpdateAvblLive(status); } catch (e) {}
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// [vx20-OPTIMISTIC-OPEN] Direct → Open (Market): วาด position ใหม่ทันที ไม่รอ GAS (เฉพาะเคส "เปิดใหม่" เท่านั้น)
+//   • เงื่อนไข (ไม่ผ่านข้อใด = ใช้เส้นทางเดิม await openFuturesPosition ทุกบรรทัด → merge / net / flip / error ตอบจาก GAS เหมือนเดิม):
+//       status โหลดแล้วและสดไม่เกิน 60 วิ · ไม่มี position symbol เดียวกันอยู่ในเครื่อง (กัน merge/net) · Avbl ในเครื่อง ≥ margin ·
+//       margin ≥ 1 USDT · ไม่มีรายการปิด/ปิดบางส่วนค้างอยู่ (GAS อาจยังเห็น position เดิมเป็น Active)
+//   • client สร้าง id (fpos_...) ส่งให้ GAS (GAS รับ data.id อยู่แล้ว) → poll ที่ตอบมีแถวเดียวกันจะไม่ถูกวาดซ้ำ
+//   • poll ที่ยิงก่อน GAS เขียนเสร็จจะไม่ลบ position นี้ (FUTD._openingIds — แนวเดียวกับ _closingIds) · GAS ปฏิเสธ → ลบออก + คืน margin
+//   • ไม่เพิ่มจำนวน request: หลังเปิดสำเร็จรวม refresh เป็นครั้งเดียว (debounce 5 วิ) · ไม่แตะสูตรเงิน/สูตร liq (Liq ใช้ client fallback เดิมจนกว่า Liq map จาก GAS จะมา)
+// ══════════════════════════════════════════════════════════════════════════════
+function _futdRefreshDebounced(ms) {
+  // [V1_8-REFRESH-ONCE] refresh หลังเปิด/ปิดมี "ชุดเดียว" (Summary + Liq map): futdRefreshAccountStatus เก็บผลลง AFTD.cache อยู่แล้ว (aftdStoreStatus)
+  //   → ธงนี้ให้ futdRefreshAccountStatus วาด Assets→Direct / Overview จาก cache ก้อนเดียวกันนั้นต่อ (maxAge — ไม่ยิง GAS เพิ่ม) แทนการยิง aftdRefreshDirectSummary() ซ้ำอีกชุดทันทีหลังปิด
+  FUTD._aftdSyncAfterRefresh = true;
+  if (FUTD._refDebT) clearTimeout(FUTD._refDebT);
+  FUTD._refDebT = setTimeout(() => { FUTD._refDebT = null; futdRefreshAccountStatus(); }, ms || 5000);
+}
+
+function _futdNewPosId() {
+  let r = '';
+  try { r = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ''; } catch (e) {}
+  if (!r) r = Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  return 'fpos_' + String(r).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+}
+
+function _futdOptOpenEligible(uid, symbol, margin) {
+  try {
+    const st = FUTD.status;
+    if (!st || !Array.isArray(st.positions)) return false;
+    if (st.uid !== undefined && String(st.uid).toLowerCase() !== String(uid).toLowerCase()) return false;
+    if (!FUTD._statusSyncedAt || (Date.now() - FUTD._statusSyncedAt) > 60000) return false;   // ข้อมูลเก่า → รอ GAS ตามเดิม
+    if (!(margin >= 1)) return false;                                                         // ต่ำกว่าขั้นต่ำ → ให้ GAS ตอบข้อความเดิม
+    const avail = parseFloat(st.avail_margin);
+    if (!isFinite(avail) || margin > avail) return false;                                     // Avbl ไม่พอ/ไม่รู้ → รอ GAS ตามเดิม
+    if (st.positions.some(p => String(p.symbol || '').toUpperCase() === symbol)) return false; // มี position symbol เดียวกัน → merge/net → รอ response
+    if (Object.keys(FUTD._closingIds || {}).length) return false;                              // กำลังปิดอยู่ — GAS อาจยังเห็นเป็น Active
+    const _rd = FUTD._reducing || {};
+    if (Object.keys(_rd).some(k => _rd[k] && _rd[k].busy)) return false;
+    return true;
+  } catch (e) { return false; }
+}
+
+// cross: ตัด Liq เก่าของ cross position ที่มีอยู่ → futdRenderPositions คำนวณใหม่ด้วย client formula (รวม position ใหม่) · snapshot โครงเดียวกับ _futdLiqAfterCloseLocal (restore ด้วย _futdLiqRestore)
+function _futdLiqAfterOpenLocal(newPos) {
+  const st = FUTD.status;
+  if (!st || !newPos) return null;
+  const snap = { st: st, map: st.liq_price_map, hadCe: Object.prototype.hasOwnProperty.call(st, 'cross_equity'), ce: st.cross_equity, newMap: undefined, newCe: undefined };
+  try {
+    if (String(newPos.mode || '').toLowerCase() === 'cross') {
+      const oldMap = st.liq_price_map || {};
+      const crossIds = {};
+      (st.positions || []).forEach(p => { if (String(p.mode || '').toLowerCase() === 'cross') crossIds[String(p.id)] = true; });
+      const newMap = {};
+      Object.keys(oldMap).forEach(id => { if (!crossIds[id]) newMap[id] = oldMap[id]; });
+      st.liq_price_map = newMap;
+      snap.newMap = newMap;
+    }
+  } catch (e) { console.warn('[futdLiqAfterOpenLocal]', e && e.message); }
+  return snap;
+}
+
+// ลบ position optimistic ออกจาก local (GAS ปฏิเสธ / ตอบไม่ตรง) + คืน margin ; ใช้ array ใหม่ (filter) ไม่ splice
+function _futdOptimisticOpenDrop(id) {
+  const rec = FUTD._openingIds && FUTD._openingIds[id];
+  if (FUTD._openingIds) delete FUTD._openingIds[id];
+  const st = FUTD.status;
+  if (!st) return rec;
+  const list = st.positions || [];
+  const cur  = list.find(p => p.id === id);
+  if (cur) {
+    const m = parseFloat(cur.margin) || (rec ? rec.margin : 0) || 0;
+    st.positions    = list.filter(p => p.id !== id);
+    st.margin_used  = Math.max(0, (parseFloat(st.margin_used) || 0) - m);
+    st.avail_margin = (parseFloat(st.avail_margin) || 0) + m;
+  }
+  if (rec && rec.liqSnap) _futdLiqRestore(rec.liqSnap);
+  _futdOptimisticSync();
+  return rec;
+}
+
+// ส่ง GAS เบื้องหลัง (ไม่ reject — จัดการ error เองทั้งหมด)
+async function _futdOptimisticOpenCommit(id, payload) {
+  let res;
+  try {
+    res = await dbCallRaw('openFuturesPosition', payload);
+  } catch (e) {
+    _futdOptimisticOpenDrop(id);
+    showToast('❌ ' + ((e && e.message) || tccT('sys_open_pos_fail')));
+    // Timeout ตอบไม่ได้ว่า GAS เขียนแล้วหรือยัง → sync สถานะจริงเร็วๆ (เหมือน rollback ฝั่งปิด)
+    setTimeout(() => { futdRefreshAccountStatus(); }, 1500);
+    return;
+  }
+  const rec = FUTD._openingIds && FUTD._openingIds[id];
+  const act = (res || {}).action;
+  if (act === 'new' && String((res || {}).id) === id) {
+    if (rec) { rec.committed = true; rec.until = Date.now() + 20000; }   // คงไว้ 20s กัน poll ที่ยิงก่อนเขียนแต่ตอบช้าลบ position
+    // เติมค่าจริงจาก GAS ลง position ที่วาดไว้ (ปกติเท่าเดิม — GAS คำนวณ margin สูตรเดียวกัน)
+    try {
+      const st = FUTD.status, cur = rec && rec.pos;
+      if (st && cur && (st.positions || []).includes(cur)) {
+        const gm = parseFloat(res.margin);
+        if (isFinite(gm) && gm > 0 && Math.abs(gm - (parseFloat(cur.margin) || 0)) > 1e-8) {
+          const d = gm - (parseFloat(cur.margin) || 0);
+          st.margin_used  = Math.max(0, (parseFloat(st.margin_used) || 0) + d);
+          st.avail_margin = Math.max(0, (parseFloat(st.avail_margin) || 0) - d);
+          cur.margin = gm; rec.margin = gm;
+        }
+        const gl = parseFloat(res.liq_price);
+        if (isFinite(gl) && gl > 0) cur.liq_price = gl;   // fallback ชั้นสุดท้ายของ render (liq_price_map จาก GAS ยังมาก่อนเสมอ)
+        _futdOptimisticSync();
+      }
+    } catch (e) { console.warn('[futdOptimisticOpen] fill', e && e.message); }
+    showToast(tccT('sys_open_ok') + (FUTD.hedgeMode ? ' [Hedge: ' + (payload.position_side || '') + ']' : ''));
+    _futdRefreshDebounced(5000);   // รวม refresh เป็นครั้งเดียว — ดึง Summary + Liq map จริงจาก GAS
+    return;
+  }
+  // GAS ตอบไม่ใช่ "position ใหม่ id เดิม" (race: มี position ที่ client ไม่รู้ → merge/net) → ทิ้ง optimistic แล้วดึงของจริงทันที
+  _futdOptimisticOpenDrop(id);
+  let _msg = tccT('sys_open_ok') + (FUTD.hedgeMode ? ' [Hedge: ' + (payload.position_side || '') + ']' : '');
+  const _pn = ((res || {}).realized_pnl >= 0 ? '+' : '') + (parseFloat((res || {}).realized_pnl) || 0).toFixed(2);
+  if (act === 'netted_reduce')     _msg = tccTF('sys_net_reduce', {rem: (parseFloat(res.remaining_size) || 0), pnl: _pn});
+  else if (act === 'netted_close') _msg = tccTF('sys_net_close', {pnl: _pn});
+  else if (act === 'netted_flip')  _msg = tccTF('sys_net_flip', {pnl: _pn});
+  showToast(_msg);
+  futdRefreshAccountStatus();
+}
+
+// คืน op (truthy) ถ้าวาด optimistic แล้วส่ง GAS เบื้องหลัง ; คืน null = ไม่เข้าเงื่อนไข → ผู้เรียกใช้เส้นทางเดิม
+function _futdOptimisticOpenBegin(uid, payload) {
+  const symbol = String(payload.symbol || '').toUpperCase();
+  const side   = String(payload.side || '').toLowerCase();
+  const lev    = parseFloat(payload.lev) || 1;
+  const size   = parseFloat(payload.size) || 0;
+  const price  = parseFloat(payload.entry_price) || 0;
+  if (!symbol || (side !== 'long' && side !== 'short') || !(size > 0) || !(price > 0) || !(lev > 0)) return null;
+  const margin = parseFloat(((price * size) / lev).toFixed(8));   // สูตรเดียวกับ GAS openFuturesPosition
+  if (!_futdOptOpenEligible(uid, symbol, margin)) return null;
+
+  const id   = _futdNewPosId();
+  const mode = String(payload.mode || 'cross').toLowerCase();
+  const pos = {
+    id: id, uid: uid, symbol: symbol, mode: mode, side: side, lev: lev,
+    entry_price: price, exit_price: 0, size: size, margin: margin, liq_price: 0,
+    realized_pnl: 0, roi: 0, avg_close: 0, status: 'Active',
+    opened_at: new Date().toISOString(), tp: payload.tp || '', sl: payload.sl || '',
+    position_side: payload.position_side || 'BOTH', is_liquidated: ''
+  };
+  const st = FUTD.status;
+  const liqSnap = _futdLiqAfterOpenLocal(pos);
+  FUTD._openingIds = FUTD._openingIds || {};
+  FUTD._openingIds[id] = { pos: pos, margin: margin, liqSnap: liqSnap, committed: false, until: Date.now() + 90000 };
+  st.positions    = (st.positions || []).concat([pos]);   // array ใหม่ — ไม่แก้ array ที่ผู้อื่นอาจวนลูปอยู่
+  st.margin_used  = (parseFloat(st.margin_used) || 0) + margin;
+  st.avail_margin = Math.max(0, (parseFloat(st.avail_margin) || 0) - margin);
+  _futdOptimisticSync();
+
+  const p = _futdOptimisticOpenCommit(id, Object.assign({}, payload, { id: id }));
+  FUTD._openPendingP = p;
+  p.then(() => { if (FUTD._openPendingP === p) FUTD._openPendingP = null; });
+  return { id: id };
+}
+
+// [V1_8-OPEN-SNAPSHOT] เคสที่ "ไม่เข้า" optimistic (merge / net / flip / status เก่า) ยังต้องรอ response ตามเดิม — แต่พอ response มา GAS ส่ง snapshot ของ position กลับมาแล้ว
+//   (merge = entry/size/margin ที่รวมแล้ว · new/flip = position ใหม่ครบฟิลด์ · net-reduce = remaining_size · net-close = realized_pnl)
+//   → ปรับ FUTD.status ในเครื่องทันที แล้ววาด แทนการรอ Summary รอบถัดไปอีก 2–3 วิ ก่อนที่ position จะขึ้นจอ
+//   • ไม่เดา: ข้อมูลไม่ครบ / ไม่เจอ position ในเครื่อง → คืน false (ไม่แตะอะไร) · futdRefreshAccountStatus() ที่ผู้เรียกยิงต่อทันที (จำนวนครั้งเท่าเดิม) เป็นตัวยืนยันค่าจริงเสมอ
+//     และถ้ามี poll บินอยู่ก่อนหน้า ผลของ poll นั้นถูกทิ้ง (v4.13-DIRECT-FRESH: _astDirty) จึงไม่ย้อนค่าเก่ากลับมา
+//   • ไม่แตะสูตรเงิน: margin ที่เหลือหลัง net-reduce ใช้สัดส่วนเดียวกับ GAS (margin × remaining/oldSize) · Liq ตัด entry เก่าให้ client formula คิดใหม่ (ชุดเดียวกับ optimistic open/close)
+function _futdApplyOpenResult(res, payload) {
+  try {
+    const st = FUTD.status;
+    if (!st || !res || !payload || !Array.isArray(st.positions)) return false;
+    if (st.uid !== undefined && String(st.uid).toLowerCase() !== String(payload.uid).toLowerCase()) return false;
+    const act = res.action;
+    const num = v => { const n = parseFloat(v); return isFinite(n) ? n : NaN; };
+    const exitPx = num(payload.entry_price);   // GAS ใช้ราคา order เป็น exit ของส่วนที่ net
+    const bumpMargin = d => {                  // d > 0 = จอง margin เพิ่ม · d < 0 = คืน
+      st.margin_used  = Math.max(0, (parseFloat(st.margin_used) || 0) + d);
+      st.avail_margin = Math.max(0, (parseFloat(st.avail_margin) || 0) - d);
+    };
+    const bookPnl = p => {                     // realized pnl เข้า balance (avail = balance − margin_used)
+      if (!isFinite(p)) return;
+      st.futures_balance = (parseFloat(st.futures_balance) || 0) + p;
+      st.avail_margin    = Math.max(0, (parseFloat(st.avail_margin) || 0) + p);
+      try { setDirectWalletBalance(st.futures_balance); } catch (_e) {}
+    };
+    const dropLiqId = id => {                  // ตัด Liq เก่าของ position นี้ออกจาก map → render ตกไป formula ฝั่ง client
+      const m = st.liq_price_map;
+      if (m && m[id] !== undefined) { const m2 = Object.assign({}, m); delete m2[id]; st.liq_price_map = m2; }
+    };
+    const buildNew = () => ({
+      id: String(res.id), uid: payload.uid, symbol: String(res.symbol || payload.symbol).toUpperCase(),
+      mode: String(res.mode || payload.mode || 'cross').toLowerCase(), side: String(res.side || payload.side).toLowerCase(),
+      lev: num(res.lev) > 0 ? num(res.lev) : (parseFloat(payload.lev) || 1),
+      entry_price: num(res.entry_price), exit_price: 0, size: num(res.size), margin: num(res.margin),
+      liq_price: num(res.liq_price) > 0 ? num(res.liq_price) : 0,
+      realized_pnl: 0, roi: 0, avg_close: 0, status: 'Active',
+      opened_at: res.opened_at || new Date().toISOString(), tp: res.tp || '', sl: res.sl || '',
+      position_side: res.position_side || payload.position_side || 'BOTH', is_liquidated: ''
+    });
+    const newOk = p => p.size > 0 && p.entry_price > 0 && p.margin > 0 && p.id && p.id !== 'undefined';
+
+    if (act === 'new') {
+      if (st.positions.some(p => p.id === String(res.id))) return false;
+      const np = buildNew();
+      if (!newOk(np)) return false;
+      _futdLiqAfterOpenLocal(np);
+      st.positions = st.positions.concat([np]);
+      bumpMargin(np.margin);
+    } else if (act === 'merged') {
+      const cur = st.positions.find(p => p.id === String(res.id));
+      const gs = num(res.size), ge = num(res.entry_price), gm = num(res.margin);
+      if (!cur || !(gs > 0 && ge > 0 && gm > 0)) return false;
+      const next = Object.assign({}, cur, { size: gs, entry_price: ge, margin: gm });
+      if (num(res.lev) > 0) next.lev = num(res.lev);
+      if (res.tp !== undefined && res.tp !== '') next.tp = res.tp;
+      if (res.sl !== undefined && res.sl !== '') next.sl = res.sl;
+      if (num(res.liq_price) > 0) next.liq_price = num(res.liq_price);   // fallback ชั้นสุดท้ายของ render (liq_price_map จาก GAS มาก่อนเสมอเมื่อมี)
+      _futdLiqAfterOpenLocal(next);   // Cross: ทุกตัวขึ้นกับ position ที่โตขึ้น → ตัด Liq เก่าของ Cross ทั้งหมด
+      dropLiqId(next.id);             // Isolated: ของ position นี้เปลี่ยนตาม entry/margin ใหม่
+      st.positions = st.positions.map(p => p.id === next.id ? next : p);
+      bumpMargin(gm - (parseFloat(cur.margin) || 0));
+    } else if (act === 'netted_reduce') {
+      const cur = st.positions.find(p => p.id === String(res.id));
+      const rs = num(res.remaining_size), oldSz = cur ? num(cur.size) : NaN;
+      if (!cur || !(rs > 0) || !(oldSz > 0) || !(rs < oldSz)) return false;
+      const oldM = parseFloat(cur.margin) || 0, rm = +(oldM * (rs / oldSz)).toFixed(8), rz = num(res.realized_pnl);
+      const next = Object.assign({}, cur, { size: rs, margin: rm });
+      if (isFinite(rz)) next.realized_pnl = +((parseFloat(cur.realized_pnl) || 0) + rz).toFixed(8);
+      st.positions = st.positions.map(p => p.id === next.id ? next : p);
+      _futdLiqAfterCloseLocal(cur, oldSz - rs, exitPx);
+      bumpMargin(rm - oldM);
+      bookPnl(rz);
+    } else if (act === 'netted_close' || act === 'netted_flip') {
+      const oldId = String(act === 'netted_flip' ? res.closed_id : res.id);
+      const cur = st.positions.find(p => p.id === oldId);
+      if (!cur) return false;
+      let np = null;
+      if (act === 'netted_flip') { np = buildNew(); if (!newOk(np)) return false; }
+      const oldM = parseFloat(cur.margin) || 0, rz = num(res.realized_pnl);
+      st.positions = st.positions.filter(p => p.id !== oldId);
+      _futdLiqAfterCloseLocal(cur, parseFloat(cur.size) || 0, exitPx);
+      bumpMargin(-oldM);
+      bookPnl(rz);
+      if (np) {
+        _futdLiqAfterOpenLocal(np);
+        st.positions = st.positions.concat([np]);
+        bumpMargin(np.margin);
+      }
+    } else {
+      return false;
+    }
+    _futdOptimisticSync();
+    return true;
+  } catch (e) {
+    console.warn('[futdApplyOpenResult]', e && e.message);
+    return false;
+  }
+}
+
 // ── futdPlaceOrder: ส่ง order ตรง Hyperliquid (Open หรือ Close) ─
 // [v2.57 FIX-A] เพิ่ม double-submit guard: disable ปุ่มทันทีที่กด, คืนใน finally
 // ป้องกัน user กดซ้ำขณะ await dbCallRaw ยังทำงานอยู่ (mirror ของ _setBtnLoading ใน Contract tab)
@@ -43430,6 +43777,7 @@ async function futdPlaceOrder(side) {
     ? (side === 'long' ? 'LONG' : 'SHORT')
     : 'BOTH';
 
+  let _optDone = false;   // [vx20-OPTIMISTIC-OPEN] true = วาด position ทันทีแล้ว GAS ยืนยันเบื้องหลัง (ไม่ยิง refresh ซ้ำตรงนี้)
   _futdSetBtnLoading(side, true);
   try {
     // ── [v2.70-LIMIT-FIX] แยก path Limit vs Market ──────────────────────────────────────
@@ -43489,7 +43837,25 @@ async function futdPlaceOrder(side) {
 
     } else {
       // ── Market Order: เปิด Position ทันที (openFuturesPosition เหมือนเดิม) ──
-      const _res = await dbCallRaw('openFuturesPosition', {
+      // [vx20-OPTIMISTIC-OPEN] มี optimistic open ค้างอยู่ → รอให้จบก่อน (กันสองคำสั่งชนกันที่ GAS แล้ว merge ผิดลำดับ) · ไม่เข้าเงื่อนไข "เปิดใหม่" = เส้นทางเดิมด้านล่างทุกบรรทัด
+      if (FUTD._openPendingP) { try { await FUTD._openPendingP; } catch (_e) {} }
+      const _optOp = _futdOptimisticOpenBegin(uid, {
+        symbol:        FUTD.symbolCoin + 'USDT',
+        side,
+        lev:           FUTD.lev,
+        size,
+        entry_price:   FUTD.lastPrice,
+        mode:          FUTD.marginMode || 'cross',
+        order_type:    'Market',
+        tp:            tp || '',
+        sl:            sl || '',
+        hedge_mode:    FUTD.hedgeMode,
+        position_side: _positionSide,
+      });
+      if (_optOp) {
+        _optDone = true;   // position ขึ้นจอแล้ว · toast สำเร็จ/ล้มเหลวมาจาก _futdOptimisticOpenCommit
+      } else {
+      const _openPayload = {
         uid,
         symbol:        FUTD.symbolCoin + 'USDT',
         side,
@@ -43502,7 +43868,10 @@ async function futdPlaceOrder(side) {
         sl:            sl || '',
         hedge_mode:    FUTD.hedgeMode,       // [v2.63-HEDGE]
         position_side: _positionSide,        // [v2.63-HEDGE] 'BOTH'|'LONG'|'SHORT'
-      });
+      };
+      const _res = await dbCallRaw('openFuturesPosition', _openPayload);
+      // [V1_8-OPEN-SNAPSHOT] merge / net / flip (ไม่เข้า optimistic): วาดจาก snapshot ใน response ทันที ไม่รอ Summary · futdRefreshAccountStatus() ท้ายฟังก์ชันยืนยันค่าจริงตามเดิม
+      _futdApplyOpenResult(_res, _openPayload);
       // [v2.68-NET] แสดงผลลัพธ์ตามจริง (netting / flip / new)
       const _act = (_res || {}).action;
       let _msg = tccT('sys_open_ok') + (FUTD.hedgeMode ? ' [Hedge: ' + _positionSide + ']' : '');
@@ -43514,6 +43883,7 @@ async function futdPlaceOrder(side) {
         _msg = tccTF('sys_net_flip', {pnl: ((_res.realized_pnl >= 0 ? '+' : '') + (parseFloat(_res.realized_pnl) || 0).toFixed(2))});
       }
       showToast(_msg);
+      }
     }
     // ── clear form fields (ทั้ง Limit และ Market) ──────────────────────────────────────
     const inp = document.getElementById('futd-size');
@@ -43523,7 +43893,7 @@ async function futdPlaceOrder(side) {
     const slInp = document.getElementById('futd-sl');
     if (slInp) slInp.value = '';
     futdSetSlider(0);
-    futdRefreshAccountStatus();
+    if (!_optDone) futdRefreshAccountStatus();   // [vx20-OPTIMISTIC-OPEN] optimistic → refresh ครั้งเดียว (debounce) หลัง GAS ยืนยัน
   } catch (e) {
     showToast('❌ ' + (e.message || tccT('sys_order_submit_fail')));
   } finally {
@@ -43768,12 +44138,35 @@ async function futdRefreshAccountStatus() {
         }
       });
     }
+    // [vx20-OPTIMISTIC-OPEN] position ที่เพิ่งเปิดแบบ optimistic: server ยังไม่เห็น (poll ยิงก่อน GAS เขียนเสร็จ) → คงไว้ + นับ margin ;
+    //   server เห็นแล้ว → ใช้ของ server (ไม่ push ซ้ำ) ; หมดเวลาและ server ไม่มี → ไม่มีจริง ปล่อยตาม server
+    const _opn = FUTD._openingIds || {};
+    Object.keys(_opn).forEach(oid => {
+      const o = _opn[oid];
+      if (!o) { delete _opn[oid]; return; }
+      if (_incomingFinal.some(sp => sp.id === oid)) { if (o.committed) delete _opn[oid]; return; }
+      if (Date.now() > o.until) { delete _opn[oid]; return; }
+      _incomingFinal.push(o.pos);
+      status.margin_used  = (parseFloat(status.margin_used)  || 0) + o.margin;
+      status.avail_margin = Math.max(0, (parseFloat(status.avail_margin) || 0) - o.margin);
+    });
     status.positions = _incomingFinal;
     FUTD.status = status;
     // [vx12-AVBL-LIVE] status เพิ่งถูกปรับ (ตัด position ที่กำลังปิด + คืน margin) → คำนวณ Avbl live ใหม่จากค่าที่ถูกต้อง
     try { futdUpdateAvblLive(); } catch (_e) {}
     // [vx10-AFTD-CACHE] ข้อมูลชุดเดียวกับ Assets→Direct — เก็บลง cache + sync ยอดแถว Overview (ไม่ต้องยิง GAS ซ้ำเมื่อสลับไปหน้านั้น)
     try { aftdStoreStatus(uid, status, _astT0); } catch (_e) {}
+    // [V1_8-REFRESH-ONCE] refresh ที่มาจาก _futdRefreshDebounced (หลังเปิด/ปิด) → sync หน้า Assets→Direct + Overview จาก cache ที่เพิ่งเก็บ (maxAge = ไม่ยิง GAS ซ้ำ)
+    //   ธงถูกตั้งเฉพาะหลังเปิด/ปิด — poll 15 วิปกติไม่แตะ · ถ้ารอบนี้ล้ม (catch) ธงค้างไว้ → รอบสำเร็จถัดไป (poll) ค่อย sync
+    if (FUTD._aftdSyncAfterRefresh) {
+      FUTD._aftdSyncAfterRefresh = false;
+      try {
+        if (typeof aftdRefreshDirectSummary === 'function') {
+          const _aftdP = aftdRefreshDirectSummary({ maxAge: 20000 });
+          if (_aftdP && typeof _aftdP.catch === 'function') _aftdP.catch(() => {});
+        }
+      } catch (_e) {}
+    }
 
     futdRenderPositions(status.positions || []);
     futdRenderOrders(status.orders || []);
@@ -44805,18 +45198,11 @@ async function futdCloseposition(posId, closeSize) {
   _futdLogCloseToHist(pos, exitPrice, result || {});
 
   showToast(tccT('sys_pos_closed_ok'));
-  futdRefreshAccountStatus();
+  _futdRefreshDebounced(5000);   // [vx20-OPTIMISTIC-OPEN] รวม refresh หลังปิด/เปิดเป็นครั้งเดียว (debounce 5 วิ) — ปิดทีละหลายรายการ (Close All) ไม่ยิงซ้ำรายละครั้ง
 
-  // [v2.74-FIX-F2] sync Assets → Futures-Direct หลังปิด position
-  // เดิม: ไม่เคยเรียก aftdRefreshDirectSummary() → AFTD.positions ค้างข้อมูลเก่า
-  //       + AFTD.todayRealizedPnl ไม่รับค่า realized PnL ใหม่ → Today's PNL ไม่ขยับ
-  // แก้:  refresh AFTD state ทันทีหลัง GAS confirm ปิด position สำเร็จ
-  //       ใช้ setTimeout 0 เพื่อไม่บล็อก futdRefreshAccountStatus ที่เพิ่งยิงไป
-  if (typeof aftdRefreshDirectSummary === 'function') {
-    setTimeout(() => {
-      aftdRefreshDirectSummary();
-    }, 0);
-  }
+  // [v2.74-FIX-F2] sync Assets → Futures-Direct หลังปิด position (AFTD.positions / Today's PNL / Overview)
+  // [V1_8-REFRESH-ONCE] เดิมยิง aftdRefreshDirectSummary() ซ้ำทันทีทุกครั้งที่ปิด (บังคับดึงสด = Summary + Liq map อีกชุด และอาจดึงซ้ำอีกรอบ — Close All N รายการ = N ชุด)
+  //   ใหม่: _futdRefreshDebounced ตั้งธง → futdRefreshAccountStatus (ชุดเดียว) วาด AFTD/Overview จาก cache ที่เพิ่งเก็บ · ถ้าผู้ใช้อยู่หน้า Assets→Direct อยู่ dbCallRaw ยิง refresh ให้เองอยู่แล้ว (หลังเขียนสำเร็จ)
 }
 
 /**
@@ -44943,8 +45329,11 @@ async function _futdClosePartial(pos, closeSize) {
   // คงค่า override 20s กัน poll ที่ยิงก่อนปิดแต่ตอบช้า แล้วเลิก
   setTimeout(() => { const r = FUTD._reducing && FUTD._reducing[posId]; if (r && !r.busy) delete FUTD._reducing[posId]; }, 20000);
 
-  futdRefreshAccountStatus();
-  if (typeof aftdRefreshDirectSummary === 'function') setTimeout(() => { aftdRefreshDirectSummary(); }, 0);
+  // [V1_8-REFRESH-ONCE] ปิดบางส่วนก็รวม refresh เป็นชุดเดียว (debounce 5 วิ) เหมือนปิดเต็ม — เดิมยิง futdRefreshAccountStatus + aftdRefreshDirectSummary ทันที (2 ชุด)
+  //   override ของ _reducing คงอยู่ 20 วิ → poll ที่ตอบ size เก่าในช่วงรอ 5 วิไม่ทำให้ size เด้งกลับ
+  //   'skipped' / ผลที่ไม่รู้จัก (ไม่ได้ปิดจริง · position อาจถูกปิดจากที่อื่น) → ไม่เดา ดึงจริงทันทีเหมือนเดิม (ธง AFTD ยังตั้งไว้ → sync ต่อให้)
+  if (act === 'reduced' || act === 'closed') _futdRefreshDebounced(5000);
+  else { FUTD._aftdSyncAfterRefresh = true; futdRefreshAccountStatus(); }
 }
 
 // ── [v2.63-CLOSE-CONFIRM] futd Close Position Confirm ──────────────────────
