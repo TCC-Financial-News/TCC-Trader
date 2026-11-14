@@ -41661,6 +41661,16 @@ function _aftdPosMark(p) {
       || (typeof S    !== 'undefined' && S.coinPrices && parseFloat(S.coinPrices[coin]))
       || parseFloat(p.mark) || 0;
 }
+/** [v1.5-MR-FIX] Cross equity สด = futures_balance + Σ unrealized (position Cross ทั้งหมด ที่ราคา mark ปัจจุบัน)
+ *  เดิม Margin Ratio ใช้ cross_equity จาก GAS (ณ เวลาที่ดึง) หรือ futures_balance เฉย ๆ (ไม่รวม unrealized → 3.63%) แล้วถ้า equity ≤ 0 ตั้งเป็น 0.00% (ผิด: ควรเป็น 100%) */
+function _futdCrossEquityLive(st, positions, fallbackBal) {
+  let base = parseFloat(st && st.futures_balance);
+  if (!isFinite(base)) base = parseFloat(fallbackBal) || 0;
+  const ps = (st && Array.isArray(st.positions) && st.positions.length) ? st.positions : (positions || []);
+  let up = 0;
+  ps.forEach(pp => { if (String(pp.mode || 'isolated').toLowerCase() === 'cross') up += _aftdPosPnl(pp, _aftdPosMark(pp)); });
+  return base + up;
+}
 function _aftdPosPnl(p, markP) {
   const entryP = parseFloat(p.entry_price) || 0;
   const size   = parseFloat(p.size) || 0;
@@ -42250,7 +42260,7 @@ function aftdRenderDirectPosList(positions, liqPriceMap) {
     } else {
       // Cross (Binance Official): total_maintenance_margin / cross_equity
       const _stAft  = FUTD.status || {};
-      const crossEqAft = parseFloat(_stAft.cross_equity) || bal || 0;
+      const crossEqAft = _futdCrossEquityLive(_stAft, positions, bal);   // [v1.5-MR-FIX] equity สด (balance + unrealized Cross ตอนนี้) — ติดลบได้
       let totalMaintAft = parseFloat(_stAft.total_maintenance_margin);
       if (!totalMaintAft || isNaN(totalMaintAft)) {
         totalMaintAft = (_stAft.positions || positions).reduce((s, pp) => {
@@ -42259,7 +42269,7 @@ function aftdRenderDirectPosList(positions, liqPriceMap) {
           return (ep > 0 && sz > 0) ? s + _mmrAft * ep * sz : s;
         }, 0);
       }
-      mrPctGlobal = crossEqAft > 0 ? Math.min(100, (totalMaintAft / crossEqAft) * 100) : 0;
+      mrPctGlobal = crossEqAft > 0 ? Math.min(100, (totalMaintAft / crossEqAft) * 100) : 100;   // [v1.5-MR-FIX] equity ≤ 0 = ถึงจุด Liquidate → 100% (เดิมแสดง 0.00%)
     }
     const mrColor   = mrPctGlobal < 50 ? 'var(--g)' : mrPctGlobal < 80 ? 'var(--y)' : 'var(--r)';
 
@@ -44201,7 +44211,7 @@ function futdRenderPositions(positions) {
     } else {
       // Cross (Binance Official): total_maintenance_margin / cross_equity
       const _st = FUTD.status || {};
-      const crossEq = parseFloat(_st.cross_equity) || parseFloat(_st.futures_balance) || 0;
+      const crossEq = _futdCrossEquityLive(_st, positions, 0);   // [v1.5-MR-FIX]
       // ใช้ total_maintenance_margin ที่ GAS คำนวณไว้ (v2.66) ถ้ามี
       // fallback: คำนวณ client-side จาก positions ที่ render อยู่
       let totalMaint = parseFloat(_st.total_maintenance_margin);
@@ -44212,7 +44222,7 @@ function futdRenderPositions(positions) {
           return (ep > 0 && sz > 0) ? s + _mmrMr * ep * sz : s;
         }, 0);
       }
-      mrPct = crossEq > 0 ? Math.min(100, (totalMaint / crossEq) * 100) : 0;
+      mrPct = crossEq > 0 ? Math.min(100, (totalMaint / crossEq) * 100) : 100;   // [v1.5-MR-FIX] equity ≤ 0 → 100%
     }
     const mrColor    = mrPct < 50 ? 'var(--g)' : mrPct < 80 ? 'var(--y)' : 'var(--r)';
 
