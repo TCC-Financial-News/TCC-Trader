@@ -33216,10 +33216,14 @@ function _dropWriteQueueIfIdle() {
   }
   try { localStorage.removeItem('tcc__write_queue'); } catch(e) {}
 }
-function _clearSessionCache(uid) {
+function _clearSessionCache(uid, keepOwnDisplay) {
   if (!uid) return;
+  // [PERF-REFRESH3] ตอนเปิดแอป/กดรีเฟรช (keepOwnDisplay=true) เก็บ cache สำหรับ "แสดงผลทันที" ของ uid ปัจจุบันไว้
+  //   (dash_ = ยอดเงิน/โปรไฟล์ · commdash_/commref_ = คอมมิชชั่น) — เดิมลบทิ้งทุกครั้ง ทำให้ยอดเงินเป็น 0.00 และ Balances ว่าง
+  //   จนกว่า GAS (ช้า) จะตอบ · ข้อมูลสดยังถูกดึงและทับเสมอ · logout / สลับ user ยังล้างหมดเหมือนเดิม (keepOwnDisplay ไม่ถูกส่ง)
+  const _keep = keepOwnDisplay ? ['tcc_dash_' + uid, 'tcc_commdash_' + uid, 'tcc_commref_' + uid] : [];
   SESSION_CACHE_KEYS.forEach(prefix => {
-    try { localStorage.removeItem('tcc_' + prefix + uid); } catch(e) {}
+    try { if (!_keep.includes('tcc_' + prefix + uid)) localStorage.removeItem('tcc_' + prefix + uid); } catch(e) {}
   });
   // [v9 FIX] กวาด cache ตกค้างจาก uid อื่น/รอบก่อนด้วย — กัน contract/position/dashboard cache ซ้ำซ้อน
   // ที่ไม่ใช่ของ uid ปัจจุบันแต่ยังหลงเหลืออยู่ใน localStorage (เช่น สลับ account บนเครื่องเดียวกัน)
@@ -33227,7 +33231,7 @@ function _clearSessionCache(uid) {
     Object.keys(localStorage).forEach(k => {
       if (!k.startsWith('tcc_')) return;
       const isStaleDataCache = SESSION_CACHE_KEYS.some(prefix => k.startsWith('tcc_' + prefix));
-      if (isStaleDataCache) localStorage.removeItem(k);
+      if (isStaleDataCache && !_keep.includes(k)) localStorage.removeItem(k);
     });
   } catch(e) {}
   // reset first-load flags → _mergeIntoHIST จะ replace แทน append ในการโหลดครั้งต่อไป
@@ -35891,7 +35895,7 @@ async function _loadOfflineStateCore() {
 
     // [SESSION CACHE] ล้าง history cache เก่าทุกครั้งที่เปิดแอพ/refresh
     // → บังคับดึงข้อมูลจาก GAS ใหม่เสมอ ไม่ใช้ cache เก่าค้างอยู่
-    if (typeof _clearSessionCache === 'function') _clearSessionCache(uid);
+    if (typeof _clearSessionCache === 'function') _clearSessionCache(uid, true);   // [PERF-REFRESH3] เก็บ cache ยอดเงิน/คอมมิชชั่นของ uid นี้ไว้แสดงทันที
 
     // ── helper: map GAS Position row → S.positions object ──
     // [v6 FIX] เพิ่ม: liq, type, realized, coin parse จาก symbol ทั้ง USDT/-PERP suffix
