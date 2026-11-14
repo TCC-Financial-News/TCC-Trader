@@ -33222,6 +33222,14 @@ function _clearSessionCache(uid, keepOwnDisplay) {
   //   (dash_ = ยอดเงิน/โปรไฟล์ · commdash_/commref_ = คอมมิชชั่น) — เดิมลบทิ้งทุกครั้ง ทำให้ยอดเงินเป็น 0.00 และ Balances ว่าง
   //   จนกว่า GAS (ช้า) จะตอบ · ข้อมูลสดยังถูกดึงและทับเสมอ · logout / สลับ user ยังล้างหมดเหมือนเดิม (keepOwnDisplay ไม่ถูกส่ง)
   const _keep = keepOwnDisplay ? ['tcc_dash_' + uid, 'tcc_commdash_' + uid, 'tcc_commref_' + uid] : [];
+  // [PERF-PNL-PERSIST] ข้อมูล PNL/Direct ที่เก็บไว้: เก็บของ uid นี้ตอนเปิดแอป/รีเฟรช · logout (ไม่ keepOwnDisplay) หรือของ uid อื่น → ลบ
+  try {
+    Object.keys(localStorage).forEach(k => {
+      if (!k.startsWith('tcc_pnlc_')) return;
+      const own = k.indexOf('_' + uid + '_') > -1 || k.endsWith('_' + uid);
+      if (!own || !keepOwnDisplay) localStorage.removeItem(k);
+    });
+  } catch (e) {}
   SESSION_CACHE_KEYS.forEach(prefix => {
     try { if (!_keep.includes('tcc_' + prefix + uid)) localStorage.removeItem('tcc_' + prefix + uid); } catch(e) {}
   });
@@ -33448,7 +33456,13 @@ function fdpToday(mode) {
   const v = FDP.today[mode];
   return (typeof v === 'number' && isFinite(v)) ? v : null;
 }
-function fdpInvalidate() { FDP.today = { contract: null, direct: null }; FDP.todayDate = ''; FDP.months = {}; }
+// [PERF-PNL-PERSIST] เก็บข้อมูลหน้า Futures PNL / Direct ลงเครื่อง (แยกตาม uid) → รีเฟรช/เปิดแอปใหม่แล้วขึ้นข้อมูลเดิมทันที (at=0 = ถือว่าเก่า → ดึงสดจาก GAS ทับเบื้องหลังเสมอ)
+//   ไม่ใช่ข้อมูลจาก D1: action เหล่านี้ (getFuturesDailyPnl / getFuturesPnlStats / getFuturesAccountSummary) Worker D1 ยังไม่รองรับ
+const _PNL_P_PREFIX = 'tcc_pnlc_';
+function _pnlPSet(key, obj) { try { const s = JSON.stringify({ v: obj, ts: Date.now() }); if (s.length > 900000) return; localStorage.setItem(_PNL_P_PREFIX + key, s); } catch (e) {} }
+function _pnlPGet(key) { try { const r = localStorage.getItem(_PNL_P_PREFIX + key); if (!r) return null; const o = JSON.parse(r); return (o && o.v) || null; } catch (e) { return null; } }
+function _pnlPDropFdp() { try { const u = '_' + _fdpUid() + '_'; Object.keys(localStorage).forEach(k => { if (k.startsWith(_PNL_P_PREFIX + 'fdpm_') && k.indexOf(u) > -1) localStorage.removeItem(k); }); } catch (e) {} }
+function fdpInvalidate() { FDP.today = { contract: null, direct: null }; FDP.todayDate = ''; FDP.months = {}; _pnlPDropFdp(); /* หลังเขียน (ปิด/เปิด position) ข้อมูลที่เก็บไว้ไม่ถูกต้องแล้ว → ลบ */ }
 function _fdpApplyDash(dash) {
   const t = dash && dash.fut_daily_today;
   if (!t) return;
@@ -33459,7 +33473,12 @@ function _fdpApplyDash(dash) {
   // sync AFTD ให้ Dashboard/Direct panel ได้ค่าเดียวกันโดยไม่ต้องรอผู้ใช้เปิดหน้า Direct
   try { if (typeof AFTD !== 'undefined' && FDP.today.direct !== null) AFTD.todayRealizedPnl = FDP.today.direct; } catch (e) {}
 }
-function fdpGetMonth(mode, year, mon) { return FDP.months[mode + '|' + year + '-' + mon] || null; }
+function fdpGetMonth(mode, year, mon) {
+  const k = mode + '|' + year + '-' + mon;
+  let c = FDP.months[k];
+  if (!c) { const p = _pnlPGet('fdpm_' + _fdpUid() + '_' + k); if (p && p.days) { p.at = 0; FDP.months[k] = p; c = p; } }   // [PERF-PNL-PERSIST] ใช้ของเดิมแสดงทันที (at=0 → ผู้เรียกจะดึงสดทับ)
+  return c || null;
+}
 async function fdpLoadMonth(mode, year, mon, force) {
   const key = mode + '|' + year + '-' + mon;
   const c = FDP.months[key];
@@ -33473,6 +33492,7 @@ async function fdpLoadMonth(mode, year, mon, force) {
       Object.keys((r && r.days) || {}).forEach(k => { days[Number(k)] = Number(r.days[k]) || 0; });
       const e = { days, today: Number(r && r.today) || 0, total: Number(r && r.total) || 0, at: Date.now() };
       FDP.months[key] = e;
+      _pnlPSet('fdpm_' + uid + '_' + key, e);
       return e;
     })
     .catch(err => { console.warn('[fdpLoadMonth] fail:', err && err.message); return null; })
@@ -33487,6 +33507,9 @@ async function fdpLoadMonth(mode, year, mon, force) {
 // (ที่ getDashboard จำกัดไว้ 100/80 รายการ) — แสดงผลได้สูงสุด 6 เดือน ถ้ามีมากกว่านั้นให้ดาวน์โหลด Excel แทน
 // ═══════════════════════════════════════════════════════════════════════
 const FSTAT = { contract: null, direct: null, inflight: {} };
+function fstatHydrate(mode) {   // [PERF-PNL-PERSIST] ยังไม่มีใน memory → ใช้ที่เก็บไว้ (at=0 → fstatLoad จะดึงสดทับ)
+  try { if (FSTAT[mode]) return; const p = _pnlPGet('fstat_' + _fdpUid() + '_' + mode); if (p) { p.at = 0; FSTAT[mode] = p; } } catch (e) {}
+}
 async function fstatLoad(mode, force) {
   const c = FSTAT[mode];
   if (!force && c && (Date.now() - c.at) < 30000) return c;
@@ -33494,7 +33517,7 @@ async function fstatLoad(mode, force) {
   const uid = _fdpUid();
   if (!uid) return null;
   FSTAT.inflight[mode] = dbCallRaw('getFuturesPnlStats', { uid, mode, days: 365, tzOffsetMin: _fdpTz() })
-    .then(r => { const e = Object.assign({}, r, { at: Date.now() }); FSTAT[mode] = e; return e; })
+    .then(r => { const e = Object.assign({}, r, { at: Date.now() }); FSTAT[mode] = e; _pnlPSet('fstat_' + uid + '_' + mode, e); return e; })
     .catch(err => { console.warn('[fstatLoad] fail:', err && err.message); return null; })
     .finally(() => { delete FSTAT.inflight[mode]; });
   return FSTAT.inflight[mode];
@@ -41833,6 +41856,7 @@ function aftdStoreStatus(uid, status, t0) {
   const prev = AFTD.cache;
   if (prev && prev.uid === uid && (prev.startedAt || 0) > t0) return; // มี cache ที่เริ่มอ่านทีหลัง (ใหม่กว่า) อยู่แล้ว
   AFTD.cache = { uid: uid, at: Date.now(), startedAt: t0, status: Object.assign({}, status) };
+  _pnlPSet('aftd_' + uid, status);   // [PERF-PNL-PERSIST]
   try { setDirectWalletBalance(status.futures_balance, t0); } catch (e) {} // [vx10-OVW-DIRECT] sync แถว Overview
 }
 
@@ -41914,6 +41938,11 @@ async function aftdRefreshDirectSummary(opts) {
   const uid = _futdCurrentUid();
   if (!uid) return;
   const reqAt = Date.now();
+  // [PERF-PNL-PERSIST] เปิดแอป/รีเฟรชใหม่ → ยังไม่มี cache ใน memory → ใช้ที่เก็บไว้แสดงทันที (at=0 → revalidate เสมอ)
+  if (!(AFTD.cache && AFTD.cache.uid === uid && AFTD.cache.status)) {
+    const _ps = _pnlPGet('aftd_' + uid);
+    if (_ps && _ps.positions) AFTD.cache = { uid: uid, at: 0, startedAt: 0, status: _ps };
+  }
   const c = AFTD.cache;
   const hasCache = !!(c && c.uid === uid && c.status);
 
@@ -48224,6 +48253,7 @@ function futdUpdateCandleCountdown() {
     const body = _fEl('fpnlBody'); if (body) body.scrollTop = 0;
 
     overlay.classList.add('fpnl-open');
+    try { fstatHydrate('contract'); fstatHydrate('direct'); } catch (e) {}   // [PERF-PNL-PERSIST]
     _fpnlRenderAll();
   };
 
