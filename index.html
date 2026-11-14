@@ -1,3 +1,9 @@
+<!-- [v1.4-DIRECT-PNL] (2026-11-14) index_tcc_main_nv4_V1_4 — ต่อจาก V1_3 · ใช้คู่กับ GAS_tcc_main_nv4_V1_4.gs (change set แยก: HTML ไม่พึ่ง GAS ใหม่ — deploy ลำดับใดก็ได้) · ค้นด้วยแท็ก "v1.4-"
+     [v1.4-DIRECT-TODAY]   Assets → Futures-Direct → Today's PNL: ก่อนข้อมูลจริงมา แสดง "—" (เดิมขึ้น +$0.00 (+0.00%) เหมือนเป็นค่าจริง) · ฐาน % (futures_balance) ≤ 0 → แสดงเฉพาะจำนวนเงิน (เดิมโชว์ +0.00% ทั้งที่ขาดทุน)
+     [v1.4-AFTD-HYDRATE]   สถานะ Direct ที่เก็บไว้ข้ามรีเฟรช: ประทับวัน → ข้ามวันแล้ว today_realized_pnl ของเมื่อวานไม่ถูกนับเป็นของวันนี้ (V1_3 ไม่มีตรานี้ — บั๊ก) · เก็บ Liq map ที่มาทีหลังด้วย · Est. Total Value/Today's PNL ใน Overview อ่านสถานะที่เก็บไว้ได้ทันที
+     [v1.4-FDP-INVALIDATE] fdpInvalidate ล้างเฉพาะ "เดือนปัจจุบัน" (เดิมล้างปฏิทินทุกเดือนทุกครั้งที่เปิด/ปิด position) + ทำให้ FSTAT ในหน่วยความจำหมดอายุ (เดิมค้างค่าก่อนปิดสูงสุด 30 วิ)
+     [v1.4-LIQ-WARN]       ย้าย console.warn "liq_price_map empty — client fallback active" จากผล getFuturesAccountSummary (ว่างโดยออกแบบ → เตือนทุกครั้งแม้ปกติ) ไปที่ผล getFuturesLiqMap ที่ว่างจริงเท่านั้น
+     ไม่แตะ: สูตร Today's PNL (Realized วันนี้ + Unrealized ทั้งก้อน — รอตัดสินใจ) · สูตร PNL/Margin/Liq/Avbl · ชั้น D1 (_D1_READ ไม่เปลี่ยน) · ฝั่ง GAS · Futures-Contract -->
 <!-- [v8.4-RZPNL] (2026-10-07) Futures → Direct → Positions → Realized PNL ใช้งานได้จริง · ใช้คู่กับ GAS_easy_TCC_v6_2_RZPNL.gs (deploy GAS ก่อน HTML แล้วรัน repairFuturesRealizedPnl 1 ครั้ง) — ค้นด้วยแท็ก "v8.4-RZPNL"
      สาเหตุ: GAS ไม่เคยสะสม realized_pnl ลงแถว position ตอนปิดบางส่วน (ค่า 0 ตลอด) + futdPosRealizedPnl ถือ 0 เป็นค่าจริงจึงไม่ไปอ่านจาก Trade History · แถวชั่วคราวใช้ coin 'BTCUSDT' แต่ตัวจับเทียบกับ 'BTC' → ไม่เคย match · กดแถว Realized PNL ได้แค่ Toast
      แก้: (1) futdPosRealizedPnl: ใช้ p.realized_pnl จาก GAS ถ้าไม่ใช่ 0 → ยอดรวมจาก TRADES ที่ดึงตอนเปิดรายละเอียด → Trade History (จับด้วย positionId ตรงตัว, กันนับซ้ำ, normalize ชื่อเหรียญ)
@@ -6844,7 +6850,7 @@ details[open]>.wdp-sum::after{transform:rotate(-135deg);margin-top:3px}
         <span id="aftd-margin-bal">0.00</span><span class="unit">USDT</span>
       </div>
       <div class="aft-usd ast-hideable" id="aftd-margin-usd">≈ $0.00</div>
-      <div class="aft-pnl-today" onclick="openFuturesPnlPanel('direct')" style="cursor:pointer"><span data-i18n="today_pnl">Today's PNL</span> &nbsp;<span id="aftd-today-pnl" style="color:var(--g)">+$0.00 (+0.00%)</span> ›</div>
+      <div class="aft-pnl-today" onclick="openFuturesPnlPanel('direct')" style="cursor:pointer"><span data-i18n="today_pnl">Today's PNL</span> &nbsp;<span id="aftd-today-pnl" style="color:var(--t2)">—</span> ›</div>
       <div class="aft-stats-row">
         <div class="aft-stat">
           <div>Wallet Balance (USDT)</div>
@@ -20149,7 +20155,9 @@ function _ovwDirectStats() {
   let upnl = 0, todayRz = 0;
   try {
     let ps = (typeof AFTD !== 'undefined' && AFTD && AFTD.positions) ? AFTD.positions : [];
-    if (!ps.length && typeof AFTD !== 'undefined' && AFTD && AFTD.cache && AFTD.cache.at > 0 && AFTD.cache.status && Array.isArray(AFTD.cache.status.positions)) ps = AFTD.cache.status.positions;
+    // [v1.4-AFTD-HYDRATE] หลังรีเฟรชยังไม่มี cache ใน memory → ลองอ่านสถานะที่เก็บไว้ (Est. Total Value/Today's PNL รวม Direct ทันที ไม่ต้องรอ prefetch)
+    if (!ps.length && typeof AFTD !== 'undefined' && AFTD && !AFTD.cache && typeof _aftdHydrate === 'function' && typeof _futdCurrentUid === 'function') _aftdHydrate(_futdCurrentUid());
+    if (!ps.length && typeof AFTD !== 'undefined' && AFTD && AFTD.cache && (AFTD.cache.at > 0 || AFTD.cache.hyd) && AFTD.cache.status && Array.isArray(AFTD.cache.status.positions)) ps = AFTD.cache.status.positions;
     ps.forEach(p => { upnl += _aftdPosPnl(p, _aftdPosMark(p)); });
   } catch (e) { upnl = 0; }
   if (!isFinite(upnl)) upnl = 0;
@@ -33461,8 +33469,20 @@ function fdpToday(mode) {
 const _PNL_P_PREFIX = 'tcc_pnlc_';
 function _pnlPSet(key, obj) { try { const s = JSON.stringify({ v: obj, ts: Date.now() }); if (s.length > 900000) return; localStorage.setItem(_PNL_P_PREFIX + key, s); } catch (e) {} }
 function _pnlPGet(key) { try { const r = localStorage.getItem(_PNL_P_PREFIX + key); if (!r) return null; const o = JSON.parse(r); return (o && o.v) || null; } catch (e) { return null; } }
-function _pnlPDropFdp() { try { const u = '_' + _fdpUid() + '_'; Object.keys(localStorage).forEach(k => { if (k.startsWith(_PNL_P_PREFIX + 'fdpm_') && k.indexOf(u) > -1) localStorage.removeItem(k); }); } catch (e) {} }
-function fdpInvalidate() { FDP.today = { contract: null, direct: null }; FDP.todayDate = ''; FDP.months = {}; _pnlPDropFdp(); /* หลังเขียน (ปิด/เปิด position) ข้อมูลที่เก็บไว้ไม่ถูกต้องแล้ว → ลบ */ }
+// [v1.4-FDP-INVALIDATE] ลบเฉพาะ "เดือนปัจจุบัน" (key ลงท้าย |YYYY-M) — เดิมลบทุกเดือนทุกครั้งที่เปิด/ปิด position ทั้งที่การปิดกระทบได้แค่เดือนปัจจุบัน → ปฏิทินเดือนก่อน ๆ ต้องโหลดใหม่ทุกครั้ง/ว่างหลังรีเฟรช
+function _pnlPDropFdp() { try { const u = '_' + _fdpUid() + '_'; const _d = new Date(), tail = '|' + _d.getFullYear() + '-' + (_d.getMonth() + 1); Object.keys(localStorage).forEach(k => { if (k.startsWith(_PNL_P_PREFIX + 'fdpm_') && k.indexOf(u) > -1 && k.endsWith(tail)) localStorage.removeItem(k); }); } catch (e) {} }
+function fdpInvalidate() {
+  FDP.today = { contract: null, direct: null }; FDP.todayDate = '';
+  // หลังเขียน (ปิด/เปิด position) ข้อมูลเดือนปัจจุบันไม่ถูกต้องแล้ว → ลบ · เดือนก่อนหน้าเปลี่ยนไม่ได้ → เก็บไว้
+  try {
+    const _d = new Date(), cy = _d.getFullYear(), cm = _d.getMonth() + 1, keep = {};
+    Object.keys(FDP.months).forEach(k => { const m = /\|(\d+)-(\d+)$/.exec(k); if (m && !(Number(m[1]) === cy && Number(m[2]) === cm)) keep[k] = FDP.months[k]; });
+    FDP.months = keep;
+  } catch (e) { FDP.months = {}; }
+  _pnlPDropFdp();
+  // สถิติ 7D/30D/1Y (FSTAT) รวมรายการที่เพิ่งปิดด้วย → ทำให้ค่าในหน่วยความจำหมดอายุ (at=0) ให้เปิดหน้า PNL ครั้งถัดไปดึงสด (เดิม cache 30 วิ ยังเป็นค่าก่อนปิด)
+  try { ['contract', 'direct'].forEach(m => { if (FSTAT[m]) FSTAT[m].at = 0; }); } catch (e) {}
+}
 function _fdpApplyDash(dash) {
   const t = dash && dash.fut_daily_today;
   if (!t) return;
@@ -41624,6 +41644,7 @@ const AFTD = {
   cache: null,           // { uid, at, startedAt, status } ; at=0 = หมดอายุ (invalidate)
   inflight: null,        // promise ของ request ที่กำลังบินอยู่ (กันยิงซ้อน)
   freshMs: 15000,        // อายุ cache ที่ถือว่า "สด" — ยังอยู่ในช่วงนี้ = ไม่ยิง GAS ซ้ำตอนสลับแท็บ
+  loaded: false,         // [v1.4-DIRECT-TODAY] true หลังวาดข้อมูล Direct จริงครั้งแรก (จาก GAS หรือจากที่เก็บไว้) — ก่อนหน้านั้น Today's PNL แสดง "—" ไม่ใช่ +$0.00 (+0.00%)
 };
 
 /** [vx10-AFTD-PNL] แหล่งราคา mark เดียวของ Assets → Direct (ทั้งตัวเลขหัวข้อและการ์ดใช้ฟังก์ชันเดียวกัน)
@@ -41697,14 +41718,20 @@ function aftdUpdateUnrealizedPnl() {
   const _todayRz    = (typeof AFTD !== 'undefined' && AFTD.todayRealizedPnl) ? parseFloat(AFTD.todayRealizedPnl) : 0;
   const _todayTotal = _todayRz + _upnl;
   const _todayEl    = document.getElementById('aftd-today-pnl');
-  if (_todayEl) {
+  // [v1.4-DIRECT-TODAY] ยังไม่เคยวาดข้อมูล Direct จริง (AFTD.loaded=false) → คง "—" ไว้ ไม่เขียนทับด้วย +$0.00 (+0.00%) ที่เป็นเลขปลอม
+  if (_todayEl && AFTD.loaded) {
     // ใช้ _mbal จาก AFTD.marginBalance (เก็บตอน _aftdApplyStatus) เพื่อคำนวณ %
     const _mbal    = (typeof AFTD !== 'undefined' && AFTD.marginBalance) ? parseFloat(AFTD.marginBalance) : 0;
-    const _todayPct = _mbal > 0 ? ((_todayTotal / _mbal) * 100) : 0;
     // [vx5-FIX-PNL] format: '+$X.XX (+X.XX%)' / '-$X.XX (-X.XX%)' ตรงกับ Contract tab
     const _signD = _todayTotal >= 0 ? '+' : '-';
-    const _pctSignD = _todayPct >= 0 ? '+' : '';
-    _todayEl.textContent = _signD + '$' + _fmt2(Math.abs(_todayTotal)) + ' (' + _pctSignD + _todayPct.toFixed(2) + '%)';
+    if (_mbal > 0) {
+      const _todayPct = (_todayTotal / _mbal) * 100;
+      const _pctSignD = _todayPct >= 0 ? '+' : '';
+      _todayEl.textContent = _signD + '$' + _fmt2(Math.abs(_todayTotal)) + ' (' + _pctSignD + _todayPct.toFixed(2) + '%)';
+    } else {
+      // [v1.4-DIRECT-TODAY] ฐาน % (futures_balance) ≤ 0 → คำนวณ % ไม่ได้ · เดิมแสดง "+0.00%" ทั้งที่ขาดทุนอยู่ (ผิด) → แสดงเฉพาะจำนวนเงิน
+      _todayEl.textContent = _signD + '$' + _fmt2(Math.abs(_todayTotal));
+    }
     _todayEl.style.color = _todayTotal >= 0 ? 'var(--g)' : 'var(--r)';
   }
 }
@@ -41822,8 +41849,18 @@ async function _futdFetchAccountStatusSplit(uid, opts) {
           AFTD.cache.status.liq_price_map            = status.liq_price_map;
           AFTD.cache.status.cross_equity             = status.cross_equity;
           AFTD.cache.status.total_maintenance_margin = status.total_maintenance_margin;
+          if (!AFTD.cache.hyd) _pnlPSet('aftd_' + AFTD.cache.uid, Object.assign({}, AFTD.cache.status, { _day: _fdpLocalDate() }));   // [v1.4-AFTD-HYDRATE] เก็บ Liq map ที่เพิ่งมาถึงด้วย (ไม่งั้นหลังรีเฟรชต้องใช้สูตรฝั่ง client ชั่วคราว)
         }
       } catch (_e) {}
+      // [v1.4-LIQ-WARN] getFuturesLiqMap ตอบแล้วแต่ map ว่าง ทั้งที่มี cross position = ผิดปกติจริง (sanity filter ของ GAS ตัดทิ้ง / ราคาไม่มา) → เตือนตรงนี้
+      //   (เดิมเตือนที่ผล Summary ซึ่ง GAS ตั้งใจส่ง liq_price_map ว่างเสมอ → ขึ้น ⚠ ทุกครั้งที่โหลดแม้ปกติ)
+      try {
+        const _lm = status.liq_price_map || {};
+        if (Object.keys(_lm).length === 0) {
+          const _cx = (status.positions || []).filter(p => String(p.mode || '').toLowerCase() === 'cross').length;
+          if (_cx > 0) console.warn('[getFuturesLiqMap] liq_price_map ว่างทั้งที่มี cross position ' + _cx + ' ตัว — GAS sanity filter ตัดค่าทิ้ง/ไม่มีราคา → ใช้สูตรฝั่ง client ชั่วคราว (ตรวจ GAS diagFuturesLiquidation)');
+        }
+      } catch (_w) {}
       if (typeof FUTD !== 'undefined' && FUTD.status && FUTD.status.uid === status.uid) {
         FUTD.status.liq_price_map            = liq.liq_price_map || {};
         FUTD.status.cross_equity             = liq.cross_equity;
@@ -41856,8 +41893,25 @@ function aftdStoreStatus(uid, status, t0) {
   const prev = AFTD.cache;
   if (prev && prev.uid === uid && (prev.startedAt || 0) > t0) return; // มี cache ที่เริ่มอ่านทีหลัง (ใหม่กว่า) อยู่แล้ว
   AFTD.cache = { uid: uid, at: Date.now(), startedAt: t0, status: Object.assign({}, status) };
-  _pnlPSet('aftd_' + uid, status);   // [PERF-PNL-PERSIST]
+  _pnlPSet('aftd_' + uid, Object.assign({}, status, { _day: _fdpLocalDate() }));   // [PERF-PNL-PERSIST] · [v1.4-AFTD-HYDRATE] ประทับวัน (local) ไว้ตัดสินว่า today_realized_pnl ยังเป็นของวันนี้หรือไม่
   try { setDirectWalletBalance(status.futures_balance, t0); } catch (e) {} // [vx10-OVW-DIRECT] sync แถว Overview
+}
+
+/** [v1.4-AFTD-HYDRATE] ดึงสถานะ Direct ที่เก็บไว้ (localStorage, แยก uid) ขึ้นมาเป็น AFTD.cache (at=0 → revalidate กับ GAS เสมอ · hyd=true → ใช้แสดงผลได้)
+ *  ข้ามวัน (หรือแถวเก่าที่ไม่มีตราวัน): today_realized_pnl ของวันก่อนต้องไม่ถูกนับเป็นของวันนี้ → ตั้ง 0 ชั่วคราว จนกว่า FDP/GAS จะส่งค่าจริงตอน revalidate
+ *  คืน AFTD.cache หรือ null — ไม่ throw */
+function _aftdHydrate(uid) {
+  try {
+    if (!uid) return null;
+    if (AFTD.cache && AFTD.cache.uid === uid && AFTD.cache.status) return AFTD.cache;
+    const ps = _pnlPGet('aftd_' + uid);
+    if (!ps || !Array.isArray(ps.positions)) return null;
+    const st = Object.assign({}, ps);
+    if (st._day !== _fdpLocalDate()) st.today_realized_pnl = 0;
+    delete st._day;
+    AFTD.cache = { uid: uid, at: 0, startedAt: 0, hyd: true, status: st };
+    return AFTD.cache;
+  } catch (e) { return null; }
 }
 
 /** fetch แบบ in-flight เดียว (ทุกคนที่เรียกพร้อมกันใช้ promise เดียวกัน) แล้วเก็บลง cache */
@@ -41922,6 +41976,7 @@ function _aftdApplyStatus(status) {
   // Position / Order counts
   _set('aftd-pos-count',   _positions.length);
   _set('aftd-order-count', (status.orders || []).length);
+  AFTD.loaded = true; // [v1.4-DIRECT-TODAY]
 
   aftdRenderDirectPosList(_positions, status.liq_price_map || {});
   // [FIX-AFTD-PNL] Unrealized PNL (หัวข้อ + การ์ด) คำนวณจาก live price จุดเดียว — ไม่ใช้ p.pnl ของ GAS (เก็บค่า ณ ตอน open)
@@ -41939,10 +41994,8 @@ async function aftdRefreshDirectSummary(opts) {
   if (!uid) return;
   const reqAt = Date.now();
   // [PERF-PNL-PERSIST] เปิดแอป/รีเฟรชใหม่ → ยังไม่มี cache ใน memory → ใช้ที่เก็บไว้แสดงทันที (at=0 → revalidate เสมอ)
-  if (!(AFTD.cache && AFTD.cache.uid === uid && AFTD.cache.status)) {
-    const _ps = _pnlPGet('aftd_' + uid);
-    if (_ps && _ps.positions) AFTD.cache = { uid: uid, at: 0, startedAt: 0, status: _ps };
-  }
+  // [v1.4-AFTD-HYDRATE] ย้ายไป _aftdHydrate (ตัด today_realized_pnl ของวันก่อนทิ้ง)
+  if (!(AFTD.cache && AFTD.cache.uid === uid && AFTD.cache.status)) _aftdHydrate(uid);
   const c = AFTD.cache;
   const hasCache = !!(c && c.uid === uid && c.status);
 
@@ -43538,20 +43591,8 @@ async function futdRefreshAccountStatus() {
     // FUTD.status.futures_balance/cross_equity เป็น fallback ตอน GAS timeout (ดู catch ด้านล่าง)
     FUTD._statusSyncedAt = Date.now();
 
-    // [v2.59-LIQ] debug log: แสดงเฉพาะเมื่อ liq_price_map ว่างและมี cross position (ลด noise)
-    const _liqEntries = Object.keys(status.liq_price_map || {}).length;
-    const _crossCount = (status.positions || []).filter(p => String(p.mode||'').toLowerCase() === 'cross').length;
-    if (_crossCount > 0 && _liqEntries === 0) {
-      // warn ครั้งแรกเท่านั้น (ทุก 10 poll) ไม่ spam ทุก poll
-      FUTD._liqWarnCount = (FUTD._liqWarnCount || 0) + 1;
-      if (FUTD._liqWarnCount === 1 || FUTD._liqWarnCount % 10 === 0) {
-        console.warn('[futdRefreshAccountStatus] liq_price_map entries:', _liqEntries,
-                     '| cross positions:', _crossCount,
-                     '⚠️ liq_price_map empty — client fallback active');
-      }
-    } else if (_crossCount > 0 && _liqEntries > 0) {
-      FUTD._liqWarnCount = 0; // reset เมื่อ GAS ส่งมาแล้ว
-    }
+    // [v1.4-LIQ-WARN] เดิม warn ตรงนี้เมื่อ liq_price_map ว่าง — แต่ getFuturesAccountSummary ส่ง map ว่างโดยออกแบบ (Liq มากับ getFuturesLiqMap ทีหลัง)
+    //   จึงขึ้น "⚠️ client fallback active" ทุกครั้งที่โหลดแม้ระบบปกติ · ย้ายไปเตือนเมื่อ getFuturesLiqMap ตอบแล้วยังว่างจริง (ใน _futdFetchAccountStatusSplit)
 
     // [v2.50] อัปเดต Balance bar ใหม่
     if (typeof futdUpdateBalanceBar === 'function') futdUpdateBalanceBar(status);
