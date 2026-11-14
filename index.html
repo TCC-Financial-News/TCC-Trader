@@ -1,3 +1,8 @@
+<!-- [v1.10-MR-ASSETS-FIX] (2026-11-14) index_tcc_main_nv4_V1_10 — ต่อจาก V1_9 · แก้เฉพาะ HTML (GAS ใช้ GAS_tcc_main_nv4_V1_8.gs ตัวเดิม ไม่ต้อง deploy ใหม่) · ค้นด้วยแท็ก "V1_10-"
+     [V1_10-MR-BASE]    Assets → Futures-Direct แสดง Margin Ratio 100.0% ผิด: เปิดหน้า Assets ตรง ๆ (ยังไม่เคยเปิดแท็บ Futures → Direct) FUTD.status = null → ฐานเงิน = 0 → equity = 0 + unrealized (ติดลบ) ≤ 0 → บังคับ 100% · แก้: _futdCrossBase หาฐานเงิน FUTD.status → AFTD.cache.status → AFTD.baseMarginBal · ไม่มีฐานเงินเลย = NaN แสดง "—" (ไม่เดา)
+     [V1_10-MR-FMT]     Assets แสดงทศนิยม 2 ตำแหน่งเหมือน Futures → Direct (เดิม 1 ตำแหน่ง) · ใช้ helper _futdMrColor/_futdMrTxt/_futdMrLit ร่วมกัน 4 จุด (Assets render+tick · Futures render+tick)
+     [V1_10-MR-DUP]     Assets: ตัดแถวข้อความ "Margin Ratio xx%" ที่ซ้ำใต้ตาราง (คงช่องในตาราง + แถบ bar) · ลบ id aftd-mrl- (ตรวจแล้วไม่มีที่อื่น/GAS อ้าง) · CSS .futd-mr-label คงไว้ (ไม่มีผล)
+     ไม่แตะ: GAS · Liq Price (_futdResolveLiq / _futdClientCrossLiq) · Contract tab · poll/engine · สูตร Isolated -->
 <!-- [v1.9-LIQ-MR-FIX] (2026-11-14) index_tcc_main_nv4_V1_9 — ต่อจาก V1_8 · ใช้คู่กับ GAS_tcc_main_nv4_V1_8.gs (deploy GAS ก่อน) · ค้นด้วยแท็ก "V1_9-"
      [V1_9-LIQ-PERSYM]  Futures → Direct: _futdClientCrossLiq เขียนใหม่เป็น per-symbol (symbol อื่นล็อกที่ mark · ใช้ WB) mirror GAS V1_8 · เดิมรวมทุก symbol + ไม่มีเทอม entry×size → ผิดเมื่อมีหลาย position (ใช้ตอนเปิด position ก่อน GAS ยืนยัน)
      [V1_9-LIQ-RESOLVE] ตัวกลาง _futdResolveLiq ใช้ร่วม 4 จุด (การ์ดใน Futures / รายการ Direct / Margin sheet / TP-SL sheet): GAS map → Cross client → Isolated · Cross ไม่มีราคา Liq = "—" (ไม่ตกไปสูตร Isolated/ค่า Sheet อีก)
@@ -41756,9 +41761,28 @@ function _aftdPosMark(p) {
 }
 /** [v1.5-MR-FIX] Cross equity สด = futures_balance + Σ unrealized (position Cross ทั้งหมด ที่ราคา mark ปัจจุบัน)
  *  เดิม Margin Ratio ใช้ cross_equity จาก GAS (ณ เวลาที่ดึง) หรือ futures_balance เฉย ๆ (ไม่รวม unrealized → 3.63%) แล้วถ้า equity ≤ 0 ตั้งเป็น 0.00% (ผิด: ควรเป็น 100%) */
+/** [V1_10-MR-BASE] ฐานเงิน (futures_balance จาก GAS · ไม่รวม unrealized) สำหรับ Margin Ratio — หาตามลำดับ:
+ *  1) FUTD.status.futures_balance (เปิดแท็บ Futures → Direct แล้ว)
+ *  2) AFTD.cache.status.futures_balance (Assets → Futures-Direct · ผลล่าสุดจาก GAS หรือที่เก็บไว้)
+ *  3) AFTD.baseMarginBal (ค่าเดียวกันที่ _aftdApplyStatus เก็บไว้)
+ *  ไม่เจอเลย → NaN (ผู้เรียกแสดง "—" ไม่เดา)
+ *  เดิม: เปิด Assets ตรง ๆ → FUTD.status = null → ฐาน = 0 → equity = 0 + unrealized (ติดลบ) ≤ 0 → แสดง 100.0% ผิด */
+function _futdCrossBase(st) {
+  let b = parseFloat(st && st.futures_balance);
+  if (isFinite(b)) return b;
+  try {
+    if (typeof AFTD !== 'undefined') {
+      b = parseFloat(AFTD.cache && AFTD.cache.status && AFTD.cache.status.futures_balance);
+      if (isFinite(b)) return b;
+      if (AFTD.loaded && typeof AFTD.baseMarginBal === 'number' && isFinite(AFTD.baseMarginBal)) return AFTD.baseMarginBal;
+    }
+  } catch (e) {}
+  return NaN;
+}
 function _futdCrossEquityLive(st, positions, fallbackBal) {
-  let base = parseFloat(st && st.futures_balance);
-  if (!isFinite(base)) base = parseFloat(fallbackBal) || 0;
+  let base = _futdCrossBase(st);
+  if (!isFinite(base)) { const fb = parseFloat(fallbackBal); if (isFinite(fb)) base = fb; }   // [V1_10-MR-BASE] ไม่มี fallback = ไม่รู้ฐาน
+  if (!isFinite(base)) return NaN;
   const ps = (st && Array.isArray(st.positions) && st.positions.length) ? st.positions : (positions || []);
   let up = 0;
   ps.forEach(pp => { if (String(pp.mode || 'isolated').toLowerCase() === 'cross') up += _aftdPosPnl(pp, _aftdPosMark(pp)); });
@@ -41821,9 +41845,14 @@ function _futdMarginRatio(p, positions) {
     const sz = parseFloat(pp.size) || 0;
     if (sz > 0) maint += mmr * markOf(pp) * sz;
   });
-  const eq = _futdCrossEquityLive(st, positions, 0);
-  return eq > 0 ? Math.min(100, (maint / eq) * 100) : 100;     // equity ≤ 0 = ถึงจุด Liquidate → 100%
+  const eq = _futdCrossEquityLive(st, positions);              // [V1_10-MR-BASE] ไม่ส่ง fallback 0 แล้ว
+  if (!isFinite(eq)) return NaN;                               // ไม่รู้ฐานเงิน = ไม่รู้ค่า → ผู้เรียกแสดง "—" (ห้ามเดาเป็น 100%)
+  return eq > 0 ? Math.min(100, (maint / eq) * 100) : 100;     // equity ≤ 0 (ฐานเงินรู้แล้ว) = ถึงจุด Liquidate → 100%
 }
+/** [V1_10-MR-FMT] helper แสดง Margin Ratio ร่วมกันทุกจุด (Assets + Futures) — mr เป็น NaN = ไม่มีค่า → "—" / สีเทา / แถบ 0 */
+function _futdMrColor(mr) { return !isFinite(mr) ? 'var(--t2)' : mr < 50 ? 'var(--g)' : mr < 80 ? 'var(--y)' : 'var(--r)'; }
+function _futdMrTxt(mr, d) { return isFinite(mr) ? mr.toFixed(d == null ? 2 : d) + '%' : '—'; }
+function _futdMrLit(mr)    { return isFinite(mr) ? Math.max(1, Math.min(4, Math.ceil(mr / 25))) : 0; }
 function _aftdPosPnl(p, markP) {
   const entryP = parseFloat(p.entry_price) || 0;
   const size   = parseFloat(p.size) || 0;
@@ -41951,12 +41980,11 @@ function aftdUpdateUnrealizedPnl() {
     if (mEl) mEl.textContent = fmtPosPx(markP); // [vx13-POS-PX]
     const nEl = document.getElementById('aftd-notional-' + p.id);
     if (nEl) nEl.textContent = '(≈$' + (size * (markP || entryP)).toFixed(2) + ')';
-    // [V1_9-MR-LIVE] Margin Ratio ขยับตามราคาสดทุก tick
+    // [V1_9-MR-LIVE] Margin Ratio ขยับตามราคาสดทุก tick · [V1_10-MR-FMT] ทศนิยม 2 ตำแหน่ง · ไม่มีฐานเงิน = "—" · [V1_10-MR-DUP] ตัด aftd-mrl- (แถวข้อความซ้ำ) ออก
     const _mr  = _futdMarginRatio(p, _positions);
-    const _mrC = _mr < 50 ? 'var(--g)' : _mr < 80 ? 'var(--y)' : 'var(--r)';
-    const _mrE = document.getElementById('aftd-mr-' + p.id);  if (_mrE) { _mrE.textContent = _mr.toFixed(1) + '%'; _mrE.style.color = _mrC; }
-    const _mrL = document.getElementById('aftd-mrl-' + p.id); if (_mrL) { _mrL.textContent = _mr.toFixed(1) + '%'; _mrL.style.color = _mrC; }
-    const _mrB = document.getElementById('aftd-mrb-' + p.id); if (_mrB) { _mrB.style.width = _mr.toFixed(1) + '%'; _mrB.style.background = _mrC; }
+    const _mrC = _futdMrColor(_mr);
+    const _mrE = document.getElementById('aftd-mr-' + p.id);  if (_mrE) { _mrE.textContent = _futdMrTxt(_mr); _mrE.style.color = _mrC; }
+    const _mrB = document.getElementById('aftd-mrb-' + p.id); if (_mrB) { _mrB.style.width = (isFinite(_mr) ? _mr.toFixed(2) : '0') + '%'; _mrB.style.background = _mrC; }
   });
 
   const _upnlEl = document.getElementById('aftd-unrealized-pnl');
@@ -42378,9 +42406,9 @@ function aftdRenderDirectPosList(positions, liqPriceMap) {
     const upnlColor = upnl >= 0 ? 'var(--g)' : 'var(--r)';
     const roiPct    = margin > 0 ? ((upnl / margin) * 100) : 0;
 
-    // [V1_9-MR-LIVE] Margin Ratio ที่ราคา mark สด (ดู _futdMarginRatio)
+    // [V1_9-MR-LIVE] Margin Ratio ที่ราคา mark สด (ดู _futdMarginRatio) · [V1_10-MR-BASE] ฐานเงินอ่านจาก AFTD ได้แม้ FUTD.status ยังเป็น null
     const mrPctGlobal = _futdMarginRatio(p, positions);
-    const mrColor   = mrPctGlobal < 50 ? 'var(--g)' : mrPctGlobal < 80 ? 'var(--y)' : 'var(--r)';
+    const mrColor   = _futdMrColor(mrPctGlobal);
 
     const tp = parseFloat(p.tp) || 0;
     const sl = parseFloat(p.sl) || 0;
@@ -42409,7 +42437,7 @@ function aftdRenderDirectPosList(positions, liqPriceMap) {
       <div class="futd-pos-detail">
         <div>Size (${coin})<b>${size}</b></div>
         <div>Margin (USDT)<b>${margin.toFixed(2)} <span style="font-size:9px;color:var(--t3)" id="aftd-notional-${p.id}">(≈$${(size * (markP || entryP)).toFixed(2)})</span></b></div>
-        <div>Margin Ratio<b id="aftd-mr-${p.id}" style="color:${mrColor}">${mrPctGlobal.toFixed(1)}%</b></div>
+        <div>Margin Ratio<b id="aftd-mr-${p.id}" style="color:${mrColor}">${_futdMrTxt(mrPctGlobal)}</b></div>
       </div>
       <div class="futd-pos-detail2">
         <div>Avg Entry<b>${fmtPosPx(entryP)}</b></div>
@@ -42417,8 +42445,7 @@ function aftdRenderDirectPosList(positions, liqPriceMap) {
         <div>Liq. Price<b style="color:var(--r)">${liqStr}</b></div>
       </div>
       <div class="futd-mr-bar-wrap">
-        <div class="futd-mr-label"><span>Margin Ratio</span><span id="aftd-mrl-${p.id}" style="color:${mrColor}">${mrPctGlobal.toFixed(1)}%</span></div>
-        <div class="futd-mr-bar-bg"><div class="futd-mr-bar-fill" id="aftd-mrb-${p.id}" style="width:${mrPctGlobal.toFixed(1)}%;background:${mrColor}"></div></div>
+        <div class="futd-mr-bar-bg"><div class="futd-mr-bar-fill" id="aftd-mrb-${p.id}" style="width:${isFinite(mrPctGlobal) ? mrPctGlobal.toFixed(2) : '0'}%;background:${mrColor}"></div></div>
       </div>
       <div class="futd-pos-tpsl-row" style="display:flex;gap:6px;margin-bottom:8px">${tpChip}${slChip}</div>
       <div class="futd-pos-actions" onclick="event.stopPropagation()">
@@ -44545,7 +44572,7 @@ function futdRenderPositions(positions) {
 
     // [V1_9-MR-LIVE] Margin Ratio ที่ราคา mark สด — ดู _futdMarginRatio (เดิม: maintenance ที่ entry + total_maintenance_margin รวม Isolated + ค่าไม่ขยับตาม tick)
     const mrPct = _futdMarginRatio(p, positions);
-    const mrColor    = mrPct < 50 ? 'var(--g)' : mrPct < 80 ? 'var(--y)' : 'var(--r)';
+    const mrColor    = _futdMrColor(mrPct);   // [V1_10-MR-FMT]
 
     // TP/SL chips
     const tp = parseFloat(p.tp) || 0;
@@ -44580,7 +44607,7 @@ function futdRenderPositions(positions) {
 
     // [vx17-POS-CARD] layout ใหม่ตาม tcc_futures.html — คง id/onclick เดิมทั้งหมด (futdUpdatePnlCards ใช้ futd-upnl/roi/mark)
     const _L        = p.side === 'long';
-    const _litN     = Math.max(1, Math.min(4, Math.ceil(mrPct / 25)));
+    const _litN     = _futdMrLit(mrPct);   // [V1_10-MR-FMT] เดิม Math.max(1, Math.min(4, Math.ceil(mrPct / 25)))
     const _riskBars = `<span class="futd-pc-risk" id="futd-risk-${p.id}">${[0,1,2,3].map(i => `<i style="${i < _litN ? 'background:' + mrColor : ''}"></i>`).join('')}</span>`;
     const _modeTxt  = posMode === 'isolated' ? 'Isolated' : 'Cross';
     const _mgnTxt   = (Math.floor(margin * 100 + 1e-6) / 100).toFixed(2);
@@ -44596,7 +44623,7 @@ function futdRenderPositions(positions) {
       <div class="futd-pc-g3">
         <div><span class="futd-pc-dot">Size (${_szUnit}) </span><button class="futd-pc-swap" onclick="futdTogglePosUnit('${p.id}')" aria-label="swap unit">${_FUTD_SVG_SWAP}</button><b id="futd-sz-${p.id}">${_szTxt}</b></div>
         <div><span>Margin (USDT)</span><b>${_mgnTxt}</b></div>
-        <div><span class="futd-pc-dot">Margin Ratio</span><b id="futd-mr-${p.id}" style="color:${mrColor}">${mrPct.toFixed(2)}%</b></div>
+        <div><span class="futd-pc-dot">Margin Ratio</span><b id="futd-mr-${p.id}" style="color:${mrColor}">${_futdMrTxt(mrPct)}</b></div>
         <div><span class="futd-pc-dot">Entry Price (USDT)</span><b>${fmtPosPx(entryP)}</b></div>
         <div><span class="futd-pc-dot">Mark Price (USDT)</span><b id="futd-mark-${p.id}">${markStr}</b></div>
         <div><span class="futd-pc-dot">Liq. Price (USDT)</span><b style="color:var(--r)">${liqStr}</b></div>
@@ -44644,10 +44671,10 @@ function futdUpdatePnlCards() {
     const mrEl = document.getElementById('futd-mr-' + p.id);
     if (!mrEl) return;
     const mr  = _futdMarginRatio(p, positions);
-    const mrC = mr < 50 ? 'var(--g)' : mr < 80 ? 'var(--y)' : 'var(--r)';
-    mrEl.textContent = mr.toFixed(2) + '%'; mrEl.style.color = mrC;
+    const mrC = _futdMrColor(mr);   // [V1_10-MR-FMT]
+    mrEl.textContent = _futdMrTxt(mr); mrEl.style.color = mrC;
     const rk = document.getElementById('futd-risk-' + p.id);
-    if (rk) { const n = Math.max(1, Math.min(4, Math.ceil(mr / 25))); Array.from(rk.children).forEach((el, i) => { el.style.background = i < n ? mrC : ''; }); }
+    if (rk) { const n = _futdMrLit(mr); Array.from(rk.children).forEach((el, i) => { el.style.background = i < n ? mrC : ''; }); }
   });
   // [vx12-AVBL-LIVE] Avbl ขยับตาม PnL ทุก tick เดียวกับการ์ด Position
   futdUpdateAvblLive();
