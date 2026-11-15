@@ -1,6 +1,11 @@
+<!-- [v1.12-LIQ-HISTORY] (2026-11-15) index_tcc_main_nv4_V1_12 — ต่อจาก V1_11 · แก้เฉพาะ HTML · ใช้คู่กับ GAS_tcc_main_nv4_V1_9.gs (deploy GAS ก่อน) · ค้นด้วยแท็ก "V1_12-"
+     [V1_12-LIQ-MARGINLOST] Futures → Direct → ประวัติ Liquidation: ช่อง "Margin Lost" ของ position โหมด Cross แสดงขาดทุนจริง (เดิม clamp ที่ margin — ตรงกับ GAS V1_9 ที่ไม่ cap Cross แล้ว) · Cross ที่ปิดแล้วได้กำไร (ขา Hedge) แสดง 0.0000 แทน |กำไร| · Isolated: clamp ที่ margin เหมือนเดิม
+     [V1_12-LIQ-PRICE-DIR] ช่อง "Liq. Price" แสดง "—" เมื่อค่าในชีตผิดทิศทาง (Long: ต้อง < entry · Short: ต้อง > entry) หรือไม่มีค่า — เช่น 740,918.9 / 40,539.98 ที่ค้างจากตอนมี Hedge ขนาดเท่ากัน (ค่าเป็น placeholder ในชีต ไม่ได้ใช้ตัดสิน Liquidate) · ใช้กฎเดียวกับ engine (FIX-LIQ-SANITY)
+     ไม่แตะ: GAS · Transaction History / Daily PNL / Calendar (fee บันทึกเป็น type เดิม 'Futures Direct Liquidation' จึงนับรวมอยู่แล้ว) · สูตร Liq / Margin Ratio · poll/engine · Contract -->
 <!-- [v1.11-KEEP-DATA-ON-RELOAD] (2026-11-14) index_tcc_main_nv4_V1_11 — ต่อจาก V1_10 · แก้เฉพาะ HTML (GAS ใช้ GAS_tcc_main_nv4_V1_8.gs ตัวเดิม ไม่ต้อง deploy ใหม่) · ค้นด้วยแท็ก "V1_11-"
      [V1_11-DIRECT-HYDRATE] Futures → ⚡ Direct: รีโหลดหน้าแล้ว Bal/Margin/Avbl/Position/Order ไม่หายเป็น "--"/0 อีก — futdInit วาดจาก snapshot ล่าสุดของ uid นี้ (aftd_<uid> ตัวเดียวกับที่ Assets → Direct ใช้) ทันที แล้ว futdRefreshAccountStatus ดึงสดจาก GAS มาทับตามปกติ
          ไม่ตั้ง FUTD._statusSyncedAt → ทางลัดที่ต้องใช้ status สด (optimistic open ≤ 60 วิ) ยังไม่ทำงานจนกว่าข้อมูลสดมา · GAS ล้ม = คงข้อมูลเดิม + แถบเตือน "ข้อมูลอาจไม่ล่าสุด" (แก้ข้อความ "Infinity s" ที่จะโผล่เมื่อไม่มีเวลา sync)
+     [V1_13-REFRESH-VIEW] รีเฟรช (F5/pull-to-refresh/ปุ่ม 🔄) แล้วกลับหน้า+แท็บเดิม: จำ page/แท็บ Assets/Futures Contract-Direct/Assets→Futures Contract-Direct/แท็บย่อย ลง sessionStorage 'tcc_view_state' · boot คง ?lang= และไม่ push history ซ้ำ · กัน hash #login/ไม่มี session · ปุ่ม 🔄 พากลับถ้าหน้า/แท็บหลุดระหว่างรีเฟรช
      [V1_11-CPOS-HYDRATE] Futures → 📋 Contract: เก็บ snapshot Position (+ Liq ล่าสุด) ลง localStorage (tcc_pnlc_cpos_<uid> — รอดการล้าง cache ตอนบูต, ล้างตอน logout) หลัง getOpenPositions สำเร็จ + ทุก 30 วิ + ตอนปิด/ซ่อนหน้า · บูตรอบใหม่วาดจาก snapshot ทันที (อายุ ≤ 12 ชม.) แล้ว loadOfflineState ทับด้วยข้อมูลจริงจาก GAS ทั้งก้อน (ลบตัวที่หายไป)
          ความปลอดภัย: position จาก snapshot ติดธง _hyd → isTpslReady = false (ไม่ trigger TP/SL ฝั่ง client จนกว่าข้อมูลจริงมา) · ตั้ง grace lock 20 วิ (_isSyncLocked กัน DD/Liquidation/funding) · ไม่เก็บ trailing · ไม่ hydrate Open Orders (syncOpenOrdersToGAS ส่ง S.openOrders กลับไป GAS + _checkLimitOrderFill fill ฝั่ง client → ข้อมูลเก่าอันตราย)
      [V1_11-D1-SETTINGS] ไม่แก้โค้ดชั้น D1 — เปิดอ่าน getOpenPositions/getOpenOrders จาก D1 ที่ชีต Settings คีย์ d1_member_actions (ดูค่าที่เสนอในคำตอบ) · เปิดไม่ได้/ไม่สด = ถอยไป GAS อัตโนมัติ
@@ -24665,14 +24670,21 @@ function tfShowCoinDDHint() {
   try { _returnPage = sessionStorage.getItem('_returnFromWhale'); } catch(e) {}
   try { _returnAstTab = sessionStorage.getItem('_returnAstTab'); } catch(e) {}
   const _hash = window.location.hash.replace('#', '');
-  const _skipTarget = _returnPage || _hash;
+  // [FIX-REFRESH-VIEW v1_13] จำ "หน้า + แท็บ" ลง sessionStorage 'tcc_view_state' (ดูสคริปต์ท้ายไฟล์ tccViewState)
+  //   รีเฟรช/F5/pull-to-refresh แล้ว hash ถูกกินหรือไม่มี (เช่น Futures Contract/Direct, แท็บย่อย Home/Spot/Markets)
+  //   → ใช้ค่าที่จำไว้เสริม · hash (หน้า/แท็บ Assets) ยังมาก่อนเสมอ · อายุ ≤ 12 ชม. · ไม่ใช้ถ้าเป็นหน้า login
+  let _savedView = null;
+  try { _savedView = JSON.parse(sessionStorage.getItem('tcc_view_state') || 'null'); } catch(e) {}
+  if (_savedView && (!_savedView.page || _savedView.page === 'login' || (Date.now() - (_savedView.t || 0)) > 12 * 3600 * 1000)) _savedView = null;
+  const _skipTarget = _returnPage || _hash || (_savedView && _savedView.page) || '';
 
   if (_skipTarget) {
     try { sessionStorage.removeItem('_returnFromWhale'); } catch(e) {}
     try { sessionStorage.removeItem('_returnAstTab'); } catch(e) {}
     splash.classList.add('gone');
     _showPages();
-    try { history.replaceState(null, '', window.location.pathname); } catch(e) {}
+    // [FIX-REFRESH-VIEW v1_13] เดิม replaceState(null,'',pathname) → ทิ้ง ?lang= และ hash แล้ว navTo ต้อง pushState ใหม่ (history โตทุกครั้งที่รีเฟรช)
+    //   ใหม่: คง URL เดิมไว้ · ระหว่างกู้คืนตั้ง _navIsBack=true ให้ navTo/astSwitchTab ใช้ replaceState แทน push
     // [FIX-BLACK-HASH-REFRESH] hash ที่ navTo()/astSwitchTab() pushState ไว้มี 2 รูปแบบ:
     //   '#assets' (หน้า) และ '#assets__<subtab>' (หน้า + แท็บย่อยของ Assets)
     //   เดิมส่ง hash ดิบเข้า navTo() → '#assets__futures-a' ไม่มี #page-assets__futures-a → จอดำ
@@ -24698,10 +24710,27 @@ function tfShowCoinDDHint() {
         return !!(el && el.classList.contains('page'));
       };
       let _pg = _skipPage, _sub = _skipSubTab;
+      // [FIX-REFRESH-VIEW v1_13] กันหน้าผิดสถานะ: มี session แต่ hash ค้าง #login → เข้าแอป · ไม่มี session แต่ hash เป็นหน้าอื่น → login
+      if (_pg === 'login' && _hasSession()) { _pg = _skipFallback; _sub = null; }
+      else if (_pg !== 'login' && !_hasSession()) { _pg = 'login'; _sub = null; }
       if (!_pageExists(_pg)) {
         console.warn('[initSplash] hash page not found:', _skipTarget, '→ fallback', _skipFallback);
         _pg = _skipFallback; _sub = null;
       }
+      // [FIX-REFRESH-VIEW v1_13] แท็บ Assets ที่จำไว้ (กรณี hash หาย) · view-state ใช้ได้เฉพาะเมื่อหน้าตรงกัน
+      const _sv = (_savedView && _savedView.page === _pg) ? _savedView : null;
+      if (!_sub && _sv && _pg === 'assets' && _sv.ast) _sub = _sv.ast;
+      // ระหว่างกู้คืน: ไม่ pushState (replace แทน) และไม่นับเป็น "ผู้ใช้กดเปลี่ยนหน้า"
+      window._tccRestoring = true;
+      let _navWas = false; try { _navWas = !!_navIsBack; _navIsBack = true; } catch(e) {}
+      let _doneOnce = false;
+      const _restoreDone = () => {
+        if (_doneOnce) return; _doneOnce = true;
+        try { _navIsBack = _navWas; } catch(e) {}
+        window._tccRestoring = false;
+        window._tccViewReady = true;
+      };
+      setTimeout(_restoreDone, 2500); // safety: กัน flag ค้างถ้ามี exception
       try {
         if (typeof navTo === 'function') navTo(_pg);
       } catch(e) {
@@ -24720,17 +24749,24 @@ function tfShowCoinDDHint() {
         } catch(e3) {}
       }
       // rAF ซ้อนอีก 1 ชั้น — รอ navTo render assets page เสร็จก่อนค่อย switch sub-tab
-      if (_sub && _pg === 'assets') {
-        requestAnimationFrame(() => {
-          // [FIX-BLACK-HASH-REFRESH-2] astSwitchTab() ลบ .active ออกจากทุก .ast-page ก่อนเสมอ ถ้าชื่อแท็บจาก hash
-          //   ไม่มีอยู่จริง (เช่น #assets__foo) เนื้อหาในหน้า Assets จะว่างเปล่า → ตรวจก่อนสลับ ถ้าไม่มีให้อยู่ที่แท็บเริ่มต้น
-          if (!document.getElementById('ast-page-' + _sub)) {
-            console.warn('[initSplash] assets sub-tab not found:', _sub, '→ keep default tab');
-            return;
+      requestAnimationFrame(() => {
+        try {
+          if (_sub && _pg === 'assets') {
+            // [FIX-BLACK-HASH-REFRESH-2] astSwitchTab() ลบ .active ออกจากทุก .ast-page ก่อนเสมอ ถ้าชื่อแท็บจาก hash
+            //   ไม่มีอยู่จริง (เช่น #assets__foo) เนื้อหาในหน้า Assets จะว่างเปล่า → ตรวจก่อนสลับ ถ้าไม่มีให้อยู่ที่แท็บเริ่มต้น
+            if (!document.getElementById('ast-page-' + _sub)) {
+              console.warn('[initSplash] assets sub-tab not found:', _sub, '→ keep default tab');
+              _sub = null;
+            } else if (typeof astSwitchTabByName === 'function') {
+              astSwitchTabByName(_sub);
+            }
           }
-          if (typeof astSwitchTabByName === 'function') astSwitchTabByName(_sub);
-        });
-      }
+          // [FIX-REFRESH-VIEW v1_13] แท็บลึกกว่านั้น: Futures Contract/Direct · Assets→Futures Contract/Direct · แท็บย่อยของหน้า
+          if (typeof window.tccApplyView === 'function') window.tccApplyView(_sv, _pg, _sub);
+        } catch(e) { console.warn('[initSplash] restore inner view failed:', e && e.message); }
+        // ปลด flag ทันที (retry ของแท็บย่อยใช้ _tccInnerRestoring แยกต่างหาก) → ผู้ใช้กดเปลี่ยนหน้าเองหลังบูตจะถูกจำ/นับตามปกติ
+        _restoreDone();
+      });
     });
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _runSkipNav, { once: true });
     else _runSkipNav();
@@ -35268,6 +35304,13 @@ function _mapGasFutdLiquidation(r) {
   const rpnl    = parseFloat(r.realized_pnl) || 0;
   const margin  = parseFloat(r.margin)        || 0;
   const posSide = String(r.position_side || 'BOTH').toUpperCase();
+  // [V1_12-LIQ-MARGINLOST] mode จริงจากชีต (ว่าง = Isolated ตามที่ GAS ตีความ) · Cross ไม่ clamp ที่ margin (GAS V1_9 หักขาดทุนจริง)
+  const isCrossPos = String(r.mode || '').replace(/\s*\d+x\s*$/i,'').trim().toLowerCase() === 'cross';
+  // [V1_12-LIQ-PRICE-DIR] liq_price ในชีตผิดทิศทาง/ไม่มีค่า → '—' (Long: liq ต้อง < entry · Short: liq ต้อง > entry)
+  const _entryN = parseFloat(r.entry_price) || 0;
+  const _liqN   = parseFloat(r.liq_price)   || 0;
+  const _sideN  = String(r.side || 'long').toLowerCase();
+  const _liqOk  = _liqN > 0 && (_entryN <= 0 || (_sideN === 'short' ? _liqN > _entryN : _liqN < _entryN));
   return {
     id:           r.id,
     coin,  symbol: sym,
@@ -35277,8 +35320,11 @@ function _mapGasFutdLiquidation(r) {
     side:         (r.side || 'long').toLowerCase(),
     positionSide: posSide,
     avgEntry:     HIST.fmtPrice(r.entry_price),
-    liqPrice:     HIST.fmtPrice(r.liq_price),
-    marginLost:   (Math.abs(rpnl) > margin ? margin : Math.abs(rpnl)).toFixed(4),
+    liqPrice:     _liqOk ? HIST.fmtPrice(_liqN) : '—',   // [V1_12-LIQ-PRICE-DIR]
+    marginLost:   (isCrossPos
+                    ? (rpnl < 0 ? Math.abs(rpnl) : 0)                      // [V1_12-LIQ-MARGINLOST] Cross: ขาดทุนจริง
+                    : (Math.abs(rpnl) > margin ? margin : Math.abs(rpnl))  // Isolated: เหมือนเดิม
+                  ).toFixed(4),
     closed:       _isoToHistTime(r.closed_at),
     ts:           r.closed_at ? Date.parse(r.closed_at) : Date.now(),
     status:       'Liquidated',
@@ -38451,6 +38497,8 @@ async function softRefreshCurrentPage() {
   _softRefreshStartedAt = now;
   _softRefreshing = true;
   const _runId = ++_softRefreshRunId;
+  // [FIX-REFRESH-VIEW v1_13] จำหน้า/แท็บก่อนรีเฟรช — ถ้าระหว่างรีเฟรชมีโค้ดใดเด้งหน้า/แท็บ (ไม่ใช่ผู้ใช้กดเอง) จะพากลับมาที่เดิม
+  const _viewSnap = (typeof window.tccViewSnapshot === 'function') ? window.tccViewSnapshot() : null;
   const fab = document.getElementById('fabRefresh');
   if (fab) fab.classList.add('spinning');
 
@@ -38551,6 +38599,7 @@ async function softRefreshCurrentPage() {
     if (_runId === _softRefreshRunId) {
       _softRefreshing = false;
       if (fab) fab.classList.remove('spinning');
+      try { if (_viewSnap && typeof window.tccViewRestoreIfMoved === 'function') window.tccViewRestoreIfMoved(_viewSnap, now); } catch (e) {}
     }
   }
 }
@@ -45582,11 +45631,14 @@ function _futdLogCloseToHist(pos, exitPrice, result) {
     // 4. futdLiquidationHistory — เฉพาะกรณีถูก Liquidate
     if (isLiq) {
       if (!HIST.futdLiquidationHistory) HIST.futdLiquidationHistory = [];
+      // [V1_12-LIQ-MARGINLOST/PRICE-DIR] กฎเดียวกับ _mapGasFutdLiquidation (Cross = ขาดทุนจริง · Liq. Price ผิดทิศทาง = '—')
+      const _isCrossL = String(pos.mode || '').trim().toLowerCase() === 'cross';
+      const _liqDirOk = liqPrice > 0 && (entryP <= 0 || (side === 'short' ? liqPrice > entryP : liqPrice < entryP));
       HIST.futdLiquidationHistory.unshift({
         id: HIST.genId(), coin: sym, symbol: sym, badge: 'Direct',
         mode: modeStr, side, lev, positionSide: posSide,
-        avgEntry: fmtEntry, liqPrice: liqPrice > 0 ? HIST.fmtPrice(liqPrice) : '—',
-        marginLost: Math.abs(rpnl) > margin ? margin.toFixed(4) : Math.abs(rpnl).toFixed(4),
+        avgEntry: fmtEntry, liqPrice: _liqDirOk ? HIST.fmtPrice(liqPrice) : '—',
+        marginLost: _isCrossL ? (rpnl < 0 ? Math.abs(rpnl) : 0).toFixed(4) : (Math.abs(rpnl) > margin ? margin.toFixed(4) : Math.abs(rpnl).toFixed(4)),
         closed: fmtTs, ts: now, status: 'Liquidated',
       });
     }
@@ -51300,5 +51352,154 @@ function fit(){
 })();
 </script>
 
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   [FIX-REFRESH-VIEW v1_13] tccViewState — จำ "หน้า + แท็บ" ให้รอดการรีเฟรช
+   · เก็บใน sessionStorage 'tcc_view_state' (เฉพาะแท็บเบราว์เซอร์นี้ · รอดทั้ง F5 / pull-to-refresh / reload)
+   · เก็บ: page · แท็บ Assets · Futures Contract/Direct · Assets→Futures Contract/Direct · แท็บย่อยที่กด (Home/Markets/Spot/Direct ฯลฯ)
+   · ใช้ตอนบูต (initSplash → tccApplyView) และกันปุ่ม 🔄 (softRefreshCurrentPage) ไม่ให้เด้งหน้า/แท็บ
+   ══════════════════════════════════════════════════════════════════════ */
+(function tccViewState() {
+  var KEY = 'tcc_view_state';
+  var INNER_FNS = ['_hmSetTab','_hmMktTab','_hmSubTab','setMktCat','setMktSub','switchSpTab','futdSwitchSubTab','mytSwitchTab','astSpotSegTab','astCommHistSwitchTab'];
+  var st = { page:'', ast:'', fut:'', aft:'', inner:{}, t:0 };
+  try { var o = JSON.parse(sessionStorage.getItem(KEY) || 'null'); if (o && typeof o === 'object') { st = Object.assign(st, o); if (!st.inner) st.inner = {}; } } catch (e) {}
+  window._tccLastUserNavAt = 0;
+
+  function ctxKey(page, ast) { return page === 'assets' ? ('assets:' + (ast || 'overview')) : page; }
+  function snapshot() {
+    var s = { page:'', ast:'', fut:'', aft:'' };
+    try { s.page = (typeof currentPage !== 'undefined') ? currentPage : ''; } catch (e) {}
+    try { s.ast  = (typeof astCurrentTab !== 'undefined') ? astCurrentTab : ''; } catch (e) {}
+    try { s.fut  = (typeof _futActiveTab !== 'undefined') ? _futActiveTab : ''; } catch (e) {}
+    try { s.aft  = (typeof AFTD !== 'undefined' && AFTD) ? AFTD.mode : ''; } catch (e) {}
+    return s;
+  }
+  function save() {
+    // ยังกู้คืนไม่เสร็จ → ห้ามเขียนทับด้วยค่า default
+    if (!window._tccViewReady || window._tccRestoring) return;
+    var s = snapshot();
+    if (!s.page) return;
+    st.page = s.page; st.ast = s.ast; st.fut = s.fut; st.aft = s.aft; st.t = Date.now();
+    try { sessionStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {}
+  }
+  window.tccViewSave = save;
+  window.tccViewSnapshot = snapshot;
+
+  // ── wrapper: ทุกครั้งที่เปลี่ยนหน้า/แท็บ → จำทันที + ติดเวลา "ผู้ใช้เปลี่ยนเอง" ──
+  function wrap(name) {
+    var orig = window[name];
+    if (typeof orig !== 'function' || orig.__tccWrapped) return;
+    var w = function () {
+      var wasRestoring = !!window._tccRestoring;
+      if (!wasRestoring) window._tccLastUserNavAt = Date.now();
+      var r;
+      try { r = orig.apply(this, arguments); }
+      finally {
+        // เส้นทางบูตปกติ (ไม่มี hash/state) — navTo ครั้งแรกทำให้พร้อมจำได้
+        if (!wasRestoring && name === 'navTo') window._tccViewReady = true;
+        try { save(); } catch (e) {}
+      }
+      return r;
+    };
+    w.__tccWrapped = true;
+    window[name] = w;
+  }
+  ['navTo', 'astSwitchTab', 'futSwitchTab', 'aftSetMode'].forEach(wrap);
+
+  // ── แท็บย่อย: จับจาก onclick ของ element ที่กด (ไม่ต้องรู้ว่าฟังก์ชันอยู่ scope ไหน) ──
+  document.addEventListener('click', function (ev) {
+    if (window._tccRestoring || window._tccInnerRestoring) return;
+    try {
+      var el = ev.target && ev.target.closest ? ev.target.closest('[onclick]') : null;
+      if (!el) return;
+      var oc = el.getAttribute('onclick') || '';
+      var m = /^\s*([A-Za-z_$][\w$]*)\s*\(/.exec(oc);
+      if (!m || INNER_FNS.indexOf(m[1]) < 0) return;
+      var page = (typeof currentPage !== 'undefined') ? currentPage : '';
+      var ast = (typeof astCurrentTab !== 'undefined') ? astCurrentTab : '';
+      st.inner[ctxKey(page, ast) + '|' + m[1]] = { oc: oc, tx: (el.textContent || '').trim().slice(0, 60) };
+      setTimeout(save, 0);
+    } catch (e) {}
+  }, true);
+
+  // ── กู้คืนแท็บลึกหลัง navTo/astSwitchTab ตอนบูต ──
+  function findInner(rec) {
+    var list = document.querySelectorAll('[onclick]');
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (e.getAttribute('onclick') === rec.oc && (e.textContent || '').trim().slice(0, 60) === rec.tx) return e;
+    }
+    return null;
+  }
+  function applyInner(sv, pg, sub, startedAt) {
+    var prefix = ctxKey(pg, sub || (sv && sv.ast)) + '|';
+    var keys = Object.keys((sv && sv.inner) || {}).filter(function (k) { return k.indexOf(prefix) === 0; });
+    if (!keys.length) return;
+    var delays = [0, 400, 1200, 2600], pending = keys.slice();
+    delays.forEach(function (d) {
+      setTimeout(function () {
+        if (!pending.length) return;
+        // ผู้ใช้กดเปลี่ยนหน้า/แท็บเองแล้วหลังบูต → เลิกกู้คืนส่วนที่เหลือ
+        if (window._tccLastUserNavAt > startedAt) { pending = []; return; }
+        var curPage = ''; try { curPage = currentPage; } catch (e) {}
+        if (curPage !== pg) { pending = []; return; }
+        pending = pending.filter(function (k) {
+          var el = findInner(sv.inner[k]);
+          if (!el) return true;               // ยังไม่ถูกสร้าง → ลองใหม่รอบถัดไป
+          window._tccInnerRestoring = true;
+          try { el.click(); } catch (e) {}
+          window._tccInnerRestoring = false;
+          return false;
+        });
+      }, d);
+    });
+  }
+  window.tccApplyView = function (sv, pg, sub) {
+    try {
+      if (!sv || sv.page !== pg) return;
+      if (pg === 'futures' && sv.fut === 'direct' && typeof futSwitchTab === 'function') futSwitchTab('direct');
+      if (pg === 'assets' && sub === 'futures-a' && sv.aft === 'direct' && typeof aftSetMode === 'function') aftSetMode('direct');
+      // Futures Direct → ย่อย Position/Orders/Bots อยู่ใต้ "futures" ctx
+      applyInner(sv, pg, sub, Date.now());
+    } catch (e) { console.warn('[tccApplyView]', e && e.message); }
+  };
+
+  // ── ใช้กับปุ่ม 🔄: ถ้าหน้า/แท็บหลุดระหว่างรีเฟรช (และผู้ใช้ไม่ได้กดเอง) → พากลับ ──
+  window.tccViewRestoreIfMoved = function (snap, startedAt) {
+    if (!snap || !snap.page) return;
+    if (window._tccLastUserNavAt > startedAt) return;     // ผู้ใช้ย้ายเองระหว่างรอ → ไม่แตะ
+    var now = snapshot();
+    if (now.page === snap.page && now.ast === snap.ast && now.fut === snap.fut && now.aft === snap.aft) return;
+    console.warn('[softRefresh] view moved during refresh → restoring', snap, now);
+    window._tccRestoring = true;
+    var navWas = false; try { navWas = !!_navIsBack; _navIsBack = true; } catch (e) {}
+    try {
+      if (now.page !== snap.page && typeof navTo === 'function') navTo(snap.page);
+      if (snap.page === 'assets' && snap.ast && typeof astSwitchTabByName === 'function' &&
+          (now.page !== 'assets' || now.ast !== snap.ast)) astSwitchTabByName(snap.ast);
+      if (snap.page === 'futures' && snap.fut && typeof futSwitchTab === 'function' &&
+          (now.page !== 'futures' || now.fut !== snap.fut)) futSwitchTab(snap.fut);
+      if (snap.page === 'assets' && snap.ast === 'futures-a' && snap.aft && typeof aftSetMode === 'function' &&
+          snapshot().aft !== snap.aft) aftSetMode(snap.aft);
+    } catch (e) { console.warn('[tccViewRestoreIfMoved]', e && e.message); }
+    finally {
+      try { _navIsBack = navWas; } catch (e) {}
+      window._tccRestoring = false;
+      save();
+    }
+  };
+
+  // ── จังหวะบันทึก: ก่อนปิด/รีเฟรช/ซ่อนหน้า + ทุก 2 วิ ──
+  window.addEventListener('pagehide', save);
+  window.addEventListener('beforeunload', save);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') save(); });
+  setInterval(save, 2000);
+
+  // เส้นทางบูตที่ไม่ผ่าน navTo wrapper (เช่น splash ปกติเรียก navTo ก่อน wrap) — เผื่อไว้: เปิดให้จำได้หลัง 6 วิ ถ้ายังไม่มีการกู้คืน
+  setTimeout(function () { if (!window._tccRestoring) window._tccViewReady = true; }, 6000);
+})();
+</script>
 </body>
 </html>
