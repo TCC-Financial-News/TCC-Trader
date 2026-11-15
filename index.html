@@ -5,6 +5,7 @@
 <!-- [v1.11-KEEP-DATA-ON-RELOAD] (2026-11-14) index_tcc_main_nv4_V1_11 — ต่อจาก V1_10 · แก้เฉพาะ HTML (GAS ใช้ GAS_tcc_main_nv4_V1_8.gs ตัวเดิม ไม่ต้อง deploy ใหม่) · ค้นด้วยแท็ก "V1_11-"
      [V1_11-DIRECT-HYDRATE] Futures → ⚡ Direct: รีโหลดหน้าแล้ว Bal/Margin/Avbl/Position/Order ไม่หายเป็น "--"/0 อีก — futdInit วาดจาก snapshot ล่าสุดของ uid นี้ (aftd_<uid> ตัวเดียวกับที่ Assets → Direct ใช้) ทันที แล้ว futdRefreshAccountStatus ดึงสดจาก GAS มาทับตามปกติ
          ไม่ตั้ง FUTD._statusSyncedAt → ทางลัดที่ต้องใช้ status สด (optimistic open ≤ 60 วิ) ยังไม่ทำงานจนกว่าข้อมูลสดมา · GAS ล้ม = คงข้อมูลเดิม + แถบเตือน "ข้อมูลอาจไม่ล่าสุด" (แก้ข้อความ "Infinity s" ที่จะโผล่เมื่อไม่มีเวลา sync)
+     [V1_14-REFRESH-CONTRACT] Futures → 📋 Contract: จำเลขที่สัญญาที่เลือกล่าสุด (localStorage selEarnCtr_<uid>) · รีเฟรชแล้วกลับสัญญาเดิม (ไม่เด้งไป active ตัวแรก) · ไม่มีที่จำ → เลือกสัญญาที่มี Position เปิดอยู่ก่อน
      [V1_13-REFRESH-VIEW] รีเฟรช (F5/pull-to-refresh/ปุ่ม 🔄) แล้วกลับหน้า+แท็บเดิม: จำ page/แท็บ Assets/Futures Contract-Direct/Assets→Futures Contract-Direct/แท็บย่อย ลง sessionStorage 'tcc_view_state' · boot คง ?lang= และไม่ push history ซ้ำ · กัน hash #login/ไม่มี session · ปุ่ม 🔄 พากลับถ้าหน้า/แท็บหลุดระหว่างรีเฟรช
      [V1_11-CPOS-HYDRATE] Futures → 📋 Contract: เก็บ snapshot Position (+ Liq ล่าสุด) ลง localStorage (tcc_pnlc_cpos_<uid> — รอดการล้าง cache ตอนบูต, ล้างตอน logout) หลัง getOpenPositions สำเร็จ + ทุก 30 วิ + ตอนปิด/ซ่อนหน้า · บูตรอบใหม่วาดจาก snapshot ทันที (อายุ ≤ 12 ชม.) แล้ว loadOfflineState ทับด้วยข้อมูลจริงจาก GAS ทั้งก้อน (ลบตัวที่หายไป)
          ความปลอดภัย: position จาก snapshot ติดธง _hyd → isTpslReady = false (ไม่ trigger TP/SL ฝั่ง client จนกว่าข้อมูลจริงมา) · ตั้ง grace lock 20 วิ (_isSyncLocked กัน DD/Liquidation/funding) · ไม่เก็บ trailing · ไม่ hydrate Open Orders (syncOpenOrdersToGAS ส่ง S.openOrders กลับไป GAS + _checkLimitOrderFill fill ฝั่ง client → ข้อมูลเก่าอันตราย)
@@ -20180,7 +20181,7 @@ document.getElementById('ast-overlay-send-confirm')?.addEventListener('click', f
 
 // ── State ──
 let earnContracts = []; // array of contract objects
-let selectedEarnContractId = null;
+let selectedEarnContractId = null; let _earnSelUserPicked = false; // [FIX-REFRESH-CONTRACT v1_14] ประกาศคู่กัน กัน TDZ
 let earnCreatePlan = { days: 15, yield: 0.3333 };
 let claimTargetId = null;
 let claimMode = 'all'; // 'all' | 'trade' | 'apt'
@@ -20875,16 +20876,30 @@ function updateEarnDropdown() {
   }).join('');
 
   // Auto-select if only one active (หรือ selectedEarnContractId ยังไม่ได้ set หรือ contract ที่เลือกอยู่กลาย frozen)
-  if (!selectedEarnContractId) {
-    const firstActive = active.find(c => c.status === 'active');
-    if (firstActive) selectEarnContract(firstActive.contractId);
+  // [FIX-REFRESH-CONTRACT v1_14] เดิม: selectedEarnContractId อยู่ใน memory อย่างเดียว → รีเฟรชแล้วเป็น null → เลือก "active ตัวแรก"
+  //   ซึ่งอาจเป็นคนละสัญญากับที่เปิดไว้/ที่มี Position → ตารางว่าง ("ไม่มี Position ในสัญญา …")
+  //   ใหม่: (1) สัญญาที่ผู้ใช้เลือกไว้ล่าสุด (จำต่อ uid ใน localStorage) (2) สัญญาที่มี Position เปิดอยู่ (3) active ตัวแรก
+  //   และถ้ารอบแรกยังไม่มีสัญญาที่จำไว้ในรายการ (snapshot ยังโหลดไม่ครบ) → พอสัญญานั้นโผล่มา จะสลับกลับให้ตราบที่ผู้ใช้ยังไม่กดเลือกเองในรอบนี้
+  const _savedEc = _earnSelLoad();
+  const _savedActive = _savedEc ? active.find(c => c.contractId === _savedEc && c.status === 'active') : null;
+  if (!selectedEarnContractId || (_savedActive && !_earnSelUserPicked && selectedEarnContractId !== _savedEc)) {
+    let _pick = _savedActive || null;
+    if (!_pick && !selectedEarnContractId) {
+      try {
+        if (typeof S !== 'undefined' && S && Array.isArray(S.positions) && S.positions.length) {
+          _pick = active.find(c => c.status === 'active' && S.positions.some(p => p.earnContractId === c.contractId)) || null;
+        }
+      } catch (e) {}
+      if (!_pick) _pick = active.find(c => c.status === 'active') || null;
+    }
+    if (_pick) selectEarnContract(_pick.contractId, { auto: true });
   } else {
     // ถ้า contract ที่เลือกอยู่กลายเป็น frozen → ย้ายไป active ตัวแรก
     const selected = earnContracts.find(x => x.contractId === selectedEarnContractId);
     if (selected && selected.status === 'frozen') {
       const firstActive = active.find(c => c.status === 'active');
       if (firstActive) {
-        selectEarnContract(firstActive.contractId);
+        selectEarnContract(firstActive.contractId, { auto: true });
       } else {
         // ไม่มี active เลย → คง selectedEarnContractId ไว้ แต่แสดง frozen state
       }
@@ -20909,8 +20924,22 @@ function toggleEarnSelDD(e) {
   });
 })();
 
-function selectEarnContract(id) {
+// [FIX-REFRESH-CONTRACT v1_14] จำ "เลขที่สัญญาที่เลือกล่าสุด" ต่อ uid — คีย์ไม่ขึ้นต้น tcc_ จึงไม่โดน clearAllStaleCache/_clearSessionCache ล้าง
+function _earnSelKey() {
+  let u = '';
+  try {
+    const s = (typeof _lgLoadSession === 'function') ? _lgLoadSession() : null;
+    u = (s && s.uid) ? String(s.uid).trim() : ((typeof USER_PROFILE !== 'undefined' && USER_PROFILE && USER_PROFILE.uid) ? String(USER_PROFILE.uid).trim() : '');
+  } catch (e) {}
+  return u ? ('selEarnCtr_' + u) : '';
+}
+function _earnSelLoad() { try { const k = _earnSelKey(); return k ? (localStorage.getItem(k) || '') : ''; } catch (e) { return ''; } }
+function _earnSelSave(id) { try { const k = _earnSelKey(); if (k && id) localStorage.setItem(k, String(id)); } catch (e) {} }
+
+function selectEarnContract(id, opts) {
   selectedEarnContractId = id;
+  // ผู้ใช้เลือกเอง (ไม่ใช่ auto-select ตอนโหลด) → จำไว้ให้รอดการรีเฟรช
+  if (!(opts && opts.auto)) { _earnSelUserPicked = true; _earnSelSave(id); }
   const c = earnContracts.find(x => x.contractId === id);
   const dd = document.getElementById('earnSelDD');
   if (dd) dd.classList.remove('open');
