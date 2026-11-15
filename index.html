@@ -1,3 +1,10 @@
+<!-- [v1.11-KEEP-DATA-ON-RELOAD] (2026-11-14) index_tcc_main_nv4_V1_11 — ต่อจาก V1_10 · แก้เฉพาะ HTML (GAS ใช้ GAS_tcc_main_nv4_V1_8.gs ตัวเดิม ไม่ต้อง deploy ใหม่) · ค้นด้วยแท็ก "V1_11-"
+     [V1_11-DIRECT-HYDRATE] Futures → ⚡ Direct: รีโหลดหน้าแล้ว Bal/Margin/Avbl/Position/Order ไม่หายเป็น "--"/0 อีก — futdInit วาดจาก snapshot ล่าสุดของ uid นี้ (aftd_<uid> ตัวเดียวกับที่ Assets → Direct ใช้) ทันที แล้ว futdRefreshAccountStatus ดึงสดจาก GAS มาทับตามปกติ
+         ไม่ตั้ง FUTD._statusSyncedAt → ทางลัดที่ต้องใช้ status สด (optimistic open ≤ 60 วิ) ยังไม่ทำงานจนกว่าข้อมูลสดมา · GAS ล้ม = คงข้อมูลเดิม + แถบเตือน "ข้อมูลอาจไม่ล่าสุด" (แก้ข้อความ "Infinity s" ที่จะโผล่เมื่อไม่มีเวลา sync)
+     [V1_11-CPOS-HYDRATE] Futures → 📋 Contract: เก็บ snapshot Position (+ Liq ล่าสุด) ลง localStorage (tcc_pnlc_cpos_<uid> — รอดการล้าง cache ตอนบูต, ล้างตอน logout) หลัง getOpenPositions สำเร็จ + ทุก 30 วิ + ตอนปิด/ซ่อนหน้า · บูตรอบใหม่วาดจาก snapshot ทันที (อายุ ≤ 12 ชม.) แล้ว loadOfflineState ทับด้วยข้อมูลจริงจาก GAS ทั้งก้อน (ลบตัวที่หายไป)
+         ความปลอดภัย: position จาก snapshot ติดธง _hyd → isTpslReady = false (ไม่ trigger TP/SL ฝั่ง client จนกว่าข้อมูลจริงมา) · ตั้ง grace lock 20 วิ (_isSyncLocked กัน DD/Liquidation/funding) · ไม่เก็บ trailing · ไม่ hydrate Open Orders (syncOpenOrdersToGAS ส่ง S.openOrders กลับไป GAS + _checkLimitOrderFill fill ฝั่ง client → ข้อมูลเก่าอันตราย)
+     [V1_11-D1-SETTINGS] ไม่แก้โค้ดชั้น D1 — เปิดอ่าน getOpenPositions/getOpenOrders จาก D1 ที่ชีต Settings คีย์ d1_member_actions (ดูค่าที่เสนอในคำตอบ) · เปิดไม่ได้/ไม่สด = ถอยไป GAS อัตโนมัติ
+     ไม่แตะ: GAS · สูตร PNL/Margin/Liq · poll/engine · ฝั่ง Open Orders · Margin Ratio (V1_10) -->
 <!-- [v1.10-MR-ASSETS-FIX] (2026-11-14) index_tcc_main_nv4_V1_10 — ต่อจาก V1_9 · แก้เฉพาะ HTML (GAS ใช้ GAS_tcc_main_nv4_V1_8.gs ตัวเดิม ไม่ต้อง deploy ใหม่) · ค้นด้วยแท็ก "V1_10-"
      [V1_10-MR-BASE]    Assets → Futures-Direct แสดง Margin Ratio 100.0% ผิด: เปิดหน้า Assets ตรง ๆ (ยังไม่เคยเปิดแท็บ Futures → Direct) FUTD.status = null → ฐานเงิน = 0 → equity = 0 + unrealized (ติดลบ) ≤ 0 → บังคับ 100% · แก้: _futdCrossBase หาฐานเงิน FUTD.status → AFTD.cache.status → AFTD.baseMarginBal · ไม่มีฐานเงินเลย = NaN แสดง "—" (ไม่เดา)
      [V1_10-MR-FMT]     Assets แสดงทศนิยม 2 ตำแหน่งเหมือน Futures → Direct (เดิม 1 ตำแหน่ง) · ใช้ helper _futdMrColor/_futdMrTxt/_futdMrLit ร่วมกัน 4 จุด (Assets render+tick · Futures render+tick)
@@ -12950,6 +12957,9 @@ function _cpsTrimCloseOrdersFor(posId, remainSize) {
 // (รอให้ S.coinPrices stabilize ก่อน) — ยืดเป็น 25 วินาที
 const TPSL_GRACE_MS = 30000; // 30 วินาที (เท่ากับ GAS isTpslReady)
 function isTpslReady(p) {
+  // [V1_11-CPOS-HYDRATE] position ที่วาดจาก snapshot (ยังไม่ได้รับการยืนยันจาก GAS) ห้าม trigger TP/SL ฝั่ง client — กัน GAS ช้า (>30 วิ) แล้วปิดตาม TP/SL เก่า
+  //   (_hyd ถูกลบเมื่อ loadOfflineState แทนที่ด้วยข้อมูลจริงจาก GAS ทั้งก้อน)
+  if (p && p._hyd) return false;
   return !p._tpslSetAt || (Date.now() - p._tpslSetAt) > TPSL_GRACE_MS;
 }
 
@@ -35948,6 +35958,83 @@ function syncOpenOrdersToGAS() {
   } catch (e) { console.warn('[OfflineEngine] syncOpenOrders err:', e.message); }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  [V1_11-CPOS-HYDRATE] Futures → 📋 Contract: รีโหลดหน้าแล้ว Position ไม่หาย (snapshot → วาดทันที → GAS ทับ)
+//   • เก็บ:  หลัง getOpenPositions สำเร็จ + ทุก 30 วิ + ตอนปิด/ซ่อนหน้า (pagehide/visibilitychange) → localStorage  tcc_pnlc_cpos_<uid>
+//            (คำนำหน้า tcc_pnlc_ รอดการล้าง cache ตอนบูตของ uid นี้ · logout/สลับ user ลบทิ้งโดย _clearSessionCache เดิม)
+//   • ไม่เก็บถ้ารอบนี้ยังไม่เคย sync สำเร็จ (_cposSyncedUid ว่าง) — กัน state ว่าง/ครึ่งโหลดทับ snapshot ดี · ไม่เก็บตัวที่ยังเป็นของ snapshot (_hyd)
+//   • ใช้:   _cposHydrate() ตอน boot (หลัง syncOfflineEngine) เฉพาะเมื่อ S.positions ว่าง + snapshot อายุ ≤ 12 ชม. → วาด + ตั้ง grace lock 20 วิ
+//   • ทับ:   loadOfflineState แทนที่ position ที่ติด _hyd ด้วยข้อมูลจริงจาก GAS ทั้งก้อน (size/entry/lev/tp/sl อาจเปลี่ยนจากอุปกรณ์อื่น) · ตัวที่ไม่อยู่ใน GAS ถูกลบ
+//   • ปลอดภัย: _hyd → isTpslReady=false · ไม่เก็บ trailing · ไม่ hydrate Open Orders (syncOpenOrdersToGAS ส่ง S.openOrders กลับ GAS + _checkLimitOrderFill fill ฝั่ง client)
+//   • Liq: เก็บค่าล่าสุดจาก window._liqPriceMap ของ position เหล่านี้ไว้แสดงชั่วคราว (ใช้แสดงผลอย่างเดียว) — liq_price_map สดจาก GAS ทับเสมอ
+// ══════════════════════════════════════════════════════════════════════════════
+const _CPOS_MAX_AGE_MS = 12 * 3600 * 1000;   // snapshot เก่ากว่านี้ไม่ใช้
+var _cposSyncedUid = '';                       // uid ที่ getOpenPositions สำเร็จในรอบนี้ ('' = ยังไม่เคย)
+function _cposUid() {
+  try {
+    const s = (typeof _lgLoadSession === 'function') ? _lgLoadSession() : null;
+    return (s && s.uid) ? String(s.uid).trim() : '';
+  } catch (e) { return ''; }
+}
+function _cposSave() {
+  try {
+    if (typeof S === 'undefined' || !Array.isArray(S.positions)) return;
+    const uid = _cposUid();
+    if (!uid || !_cposSyncedUid || _cposSyncedUid !== uid) return;   // ยังไม่เคย sync สำเร็จ หรือ uid เปลี่ยน → ห้ามเขียนทับ
+    const pos = [];
+    S.positions.forEach(p => {
+      if (!p || !p.id || p._hyd) return;
+      if (p.status && !/^(active|partially closed)$/i.test(String(p.status))) return;
+      pos.push({
+        id: p.id, uid: p.uid, coin: p.coin, symbol: p.symbol, side: p.side, lev: p.lev,
+        entry: p.entry, size: p.size, margin: p.margin, tp: p.tp || null, sl: p.sl || null,
+        earnContractId: p.earnContractId || '', type: p.type, realized: p.realized || 0,
+        openedTs: p.openedTs, mode: p.mode,
+      });
+    });
+    const lm = window._liqPriceMap || {};
+    const liq = {};
+    pos.forEach(p => { if (lm[p.id] != null) liq[p.id] = lm[p.id]; });
+    _pnlPSet('cpos_' + uid, { pos: pos, liq: liq, at: Date.now() });
+  } catch (e) { /* best-effort */ }
+}
+function _cposHydrate() {
+  try {
+    if (typeof S === 'undefined' || !Array.isArray(S.positions) || S.positions.length) return false;   // มีข้อมูลในหน่วยความจำแล้ว — ไม่ทับ
+    const uid = _cposUid();
+    if (!uid) return false;
+    const v = _pnlPGet('cpos_' + uid);
+    if (!v || !Array.isArray(v.pos) || !v.pos.length) return false;
+    if (!((Date.now() - (v.at || 0)) <= _CPOS_MAX_AGE_MS)) return false;                              // เก่าเกิน 12 ชม. (หรือไม่มีเวลา) — ไม่ใช้
+    const now = Date.now();
+    v.pos.forEach(r => {
+      if (!r || !r.id) return;
+      S.positions.push({
+        id: r.id, uid: r.uid, coin: r.coin, symbol: r.symbol, side: r.side, lev: r.lev,
+        entry: r.entry, size: r.size, margin: r.margin, liq: 0, tp: r.tp || null, sl: r.sl || null,
+        earnContractId: r.earnContractId || '', status: 'Active', type: r.type || 'Market', realized: r.realized || 0,
+        pnl: 0, roi: 0, mark: r.entry, marginRatio: 0, openedTs: r.openedTs || now, mode: r.mode || 'Cross',
+        _tpslSetAt: now, _hyd: true,
+      });
+    });
+    if (!S.positions.length) return false;
+    if (v.liq && typeof v.liq === 'object') window._liqPriceMap = Object.assign({}, v.liq, window._liqPriceMap || {});   // ค่าสดที่มีอยู่แล้วชนะเสมอ
+    window._restoreGracePeriodUntil = Math.max(window._restoreGracePeriodUntil || 0, now + 20000);                       // lock แบบ timer (หมดเอง) กัน DD/Liquidation/funding
+    if (typeof renderPositions === 'function') renderPositions();
+    if (typeof updatePositionsPNL === 'function') updatePositionsPNL();
+    console.warn('[OfflineEngine] positions shown from saved snapshot:', S.positions.length, '— waiting for GAS to confirm');
+    return true;
+  } catch (e) {
+    console.warn('[OfflineEngine] hydrate positions fail (ignored):', e && e.message);
+    return false;
+  }
+}
+try {
+  window.addEventListener('pagehide', _cposSave);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') _cposSave(); });
+  setInterval(_cposSave, 30000);
+} catch (e) { /* best-effort */ }
+
 /**
  * syncOfflineEngine — เรียกตอนเปิดแอป: ส่ง earnContracts + openOrders ไป GAS ครั้งเดียว
  */
@@ -36195,6 +36282,11 @@ async function _loadOfflineStateCore() {
           const existing = localById[r.id];
           if (!existing) {
             S.positions.push(_mapGasPosition(r));
+          } else if (existing._hyd) {
+            // [V1_11-CPOS-HYDRATE] position ที่วาดจาก snapshot → แทนที่ด้วยข้อมูลจริงจาก GAS ทั้งก้อน (เดิมกิ่ง else ด้านล่างอัปเดตแค่ tp/sl/realized
+            //   ซึ่งไม่พอ เพราะ size/entry/lev/margin อาจเปลี่ยนจากอุปกรณ์อื่น) · _hyd หายไปพร้อมวัตถุเดิม → TP/SL ฝั่ง client กลับมาทำงานตามปกติหลัง grace
+            const _hi = S.positions.indexOf(existing);
+            if (_hi > -1) S.positions[_hi] = _mapGasPosition(r);
           } else {
             // [v17 FIX] เดิม comment บอกว่า "อัปเดต existing" แต่โค้ดจริงข้ามไปเฉยๆ
             // ทำให้ tp/sl ที่เปลี่ยนจาก server (เช่นตั้งใหม่จากอุปกรณ์อื่น/แอดมิน) ไม่เคย sync เข้า local เลย
@@ -36216,6 +36308,8 @@ async function _loadOfflineStateCore() {
         if (typeof renderPositions === 'function') renderPositions();
         if (typeof updatePositionsPNL === 'function') updatePositionsPNL();
         console.warn('[OfflineEngine] positions synced from GAS:', posList.length, '(local:', S.positions.length, ')');
+        _cposSyncedUid = String(uid).trim();   // [V1_11-CPOS-HYDRATE] รอบนี้ getOpenPositions สำเร็จแล้ว → เริ่มเก็บ snapshot ได้
+        _cposSave();
       }
     } catch(posErr) {
       console.warn('[OfflineEngine] loadPositions fail:', posErr.message);
@@ -36523,6 +36617,8 @@ async function _loadOfflineStateCore() {
       console.warn('[OfflineEngine] loadOpenOrders fail:', ooErr.message);
     }
 
+    _cposSave();   // [V1_11-CPOS-HYDRATE] เก็บอีกครั้งหลัง Liq map / Contract status มาครบ (ให้ snapshot มี Liq ล่าสุดด้วย)
+
   } catch (e) {
     console.warn('[OfflineEngine] loadOfflineState fail:', e.message);
   } finally {
@@ -36764,6 +36860,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // - [vx8-STAGGER] loadOfflineState เริ่มหลัง loadDashboard 300ms (ยังทำงานซ้อนกัน ไม่ใช่ sequential)
   //   เพื่อลดการยิง GAS หลาย call พร้อมกันในเสี้ยววินาทีแรกของ boot
   syncOfflineEngine(); // ส่ง local state → GAS (fire-and-forget)
+  _cposHydrate();      // [V1_11-CPOS-HYDRATE] วาด Position จาก snapshot ล่าสุดทันที (หลัง syncOfflineEngine — ซึ่งไม่อ่าน S.positions) แล้ว loadOfflineState ทับด้วยข้อมูลจริง
 
   (async () => {
     const [_dashSettled, _offlineSettled] = await Promise.allSettled([
@@ -42521,6 +42618,35 @@ function _futdCurrentUid() {
 }
 
 // ── Init / Stop ──────────────────────────────────────────────────
+/** [V1_11-DIRECT-HYDRATE] รีโหลดหน้า/เปิดแท็บ Direct แล้วข้อมูลไม่หาย: ยังไม่มี FUTD.status (ยังไม่เคยดึงสดในรอบนี้) → ใช้ snapshot ล่าสุดของ uid นี้
+ *  (aftd_<uid> ที่ aftdStoreStatus เก็บไว้ทุกครั้งที่ดึงสำเร็จ — ตัวเดียวกับที่ Assets → Direct ใช้ผ่าน _aftdHydrate · ข้ามวัน = ตัด today_realized_pnl ให้แล้ว)
+ *  วาด Balance / Position / Order ทันที แล้ว futdRefreshAccountStatus() ดึงสดจาก GAS มาทับตามปกติ
+ *  ไม่ตั้ง FUTD._statusSyncedAt → optimistic open (ต้องสด ≤ 60 วิ) และ carry cross_equity (≤ 90 วิ) ยังไม่ทำงานจนกว่าข้อมูลสดจะมา
+ *  GAS ล้ม → catch เดิมของ futdRefreshAccountStatus วาดจาก FUTD.status นี้ + แถบเตือน · คืน true เมื่อ hydrate สำเร็จ */
+function _futdHydrateStatus() {
+  if (FUTD.status) return false;                                   // มีข้อมูลในรอบนี้แล้ว (เคยดึงสด/เคย hydrate) — ไม่ทับ
+  const uid = _futdCurrentUid();
+  if (!uid) return false;
+  const c   = (typeof _aftdHydrate === 'function') ? _aftdHydrate(uid) : null;
+  const src = c && c.status;
+  if (!src || !Array.isArray(src.positions)) return false;
+  if (src.uid !== undefined && String(src.uid).toLowerCase() !== String(uid).toLowerCase()) return false;
+  const st = Object.assign({}, src, {
+    positions: src.positions.map(p => Object.assign({}, p)),
+    orders:    (Array.isArray(src.orders) ? src.orders : []).map(o => Object.assign({}, o)),
+    _hyd: true,
+  });
+  FUTD.status = st;
+  try { if (typeof futdUpdateBalanceBar === 'function') futdUpdateBalanceBar(st); } catch (e) {}
+  futdRenderPositions(st.positions);
+  futdRenderOrders(st.orders);
+  const cntPos = document.getElementById('futdCntPos');
+  const cntOrd = document.getElementById('futdCntOrd');
+  if (cntPos) cntPos.textContent = st.positions.length || 0;
+  if (cntOrd) cntOrd.textContent = st.orders.length    || 0;
+  return true;
+}
+
 /** เรียกตอนเข้าหน้า Futures-Direct (จาก navTo) */
 function futdInit() {
   // [v2.50] Init new layout elements
@@ -42555,6 +42681,7 @@ function futdInit() {
     if (_amtUnitEl && FUTD.amtUnit !== 'USDT') { FUTD.amtUnit = _initCoin; _amtUnitEl.textContent = _initCoin; }
   }
 
+  try { _futdHydrateStatus(); } catch (e) { console.warn('[futdInit] hydrate snapshot fail (ignored):', e && e.message); }   // [V1_11-DIRECT-HYDRATE] วาดค่าเดิมก่อน แล้วดึงสดทับ
   futdRefreshAccountStatus();
   futdRefreshPrice();
   futdStopPolling();
@@ -44276,7 +44403,8 @@ async function futdRefreshAccountStatus() {
       if (_posEl) {
         const _warn = document.createElement('div');
         _warn.style.cssText = 'font-size:10px;color:var(--y);text-align:center;padding:4px 8px;opacity:.75';
-        _warn.textContent = _age <= STALE_MS
+        // [V1_11-DIRECT-HYDRATE] ข้อมูลจาก snapshot (ยังไม่เคย sync สำเร็จในรอบนี้) _age = Infinity → ใช้ข้อความ cache แทน "Infinity s"
+        _warn.textContent = (_age <= STALE_MS || !isFinite(_age))
           ? tccT('sys_stale_cache')
           : tccTF('sys_stale_old', {s: Math.round(_age / 1000)});
         _posEl.insertBefore(_warn, _posEl.firstChild);
