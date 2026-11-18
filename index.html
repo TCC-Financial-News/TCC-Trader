@@ -4326,6 +4326,9 @@ body{background:var(--bg);color:var(--t1);font-family:var(--sans);font-size:13px
 /* Coin selector dropdown */
 .coin-dropdown{position:absolute;top:44px;left:0;right:0;background:var(--bg3);border:1px solid var(--bl);border-radius:var(--rmd);z-index:200;max-height:320px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.4)}
 .coin-dropdown.open{display:block}
+/* [v4.16-COIN-SEARCH] แถบ Contract/Direct (.fut-tab-bar z-index:200) ทับ dropdown เหรียญ (อยู่ใน .topbar z-index:100) → ช่องค้นหาด้านบน dropdown ถูกบังมิดทั้ง 2 แท็บ
+   เปิด dropdown อยู่ให้ยก .topbar ขึ้นเหนือแถบแท็บ (class dd-open ถูกซิงก์จากสถานะ .open ของ #coinDD ไม่ว่าจะปิดจากจุดไหน) */
+.topbar.dd-open{z-index:300}
 .cd-item{padding:8px 12px;font-size:12px;font-family:var(--mono);cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background .1s}
 .cd-item:hover{background:var(--bgh)}
 .cd-item .cd-price{color:var(--t2);font-size:11px}
@@ -5700,7 +5703,9 @@ details[open]>.wdp-sum::after{transform:rotate(-135deg);margin-top:3px}
   <div class="coin-dropdown" id="coinDD" style="max-height:320px">
     <div style="padding:6px 8px;position:sticky;top:0;background:var(--bg3);z-index:1;border-bottom:1px solid var(--bl)">
       <input id="coinDDSearch" type="text" placeholder="ค้นหาเหรียญ..." data-i18n-placeholder="search_coin" oninput="filterCoinDD(this.value)"
-        style="width:100%;background:var(--bg4);border:1px solid var(--bl);border-radius:4px;padding:5px 8px;font-size:12px;color:var(--t1);outline:none">
+        onkeydown="if(event.key==='Enter'){event.preventDefault();coinDDPickFirst();}"
+        autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="go"
+        style="width:100%;box-sizing:border-box;background:var(--bg4);border:1px solid var(--bl);border-radius:4px;padding:6px 8px;font-size:13px;color:var(--t1);outline:none">
     </div>
     <div id="coinDDList"><div style="padding:10px 12px;font-size:11px;color:var(--t2)"><span data-i18n="loading">กำลังโหลด...</span></div></div>
   </div>
@@ -13716,6 +13721,25 @@ function toggleCoinDD() {
     setTimeout(() => { const s = document.getElementById('coinDDSearch'); if (s) { s.focus(); s.value = ''; filterCoinDD(''); } }, 50);
   }
 }
+
+/* [v4.16-COIN-SEARCH] กด Enter ในช่องค้นหา = เลือกเหรียญแรกในผลลัพธ์ (ใช้ได้ทั้งแท็บ Contract และ Direct เพราะ selectCoin ซิงก์ให้ทั้งคู่) */
+function coinDDPickFirst() {
+  const first = document.querySelector('#coinDDList .cd-item');
+  if (first) first.click();
+}
+
+/* [v4.16-COIN-SEARCH] ซิงก์ class dd-open บน .topbar ตามสถานะ .open ของ #coinDD — ปิดได้หลายจุด (เลือกเหรียญ / คลิกนอก / สลับหน้า) จึงใช้ observer แทนการแก้ทุกจุด */
+(function _initCoinDDLayer() {
+  const init = () => {
+    const dd = document.getElementById('coinDD');
+    if (!dd || dd._ddLayerBound) return;
+    dd._ddLayerBound = true;
+    const sync = () => { const tb = dd.closest('.topbar'); if (tb) tb.classList.toggle('dd-open', dd.classList.contains('open')); };
+    if (window.MutationObserver) new MutationObserver(sync).observe(dd, { attributes: true, attributeFilter: ['class'] });
+    sync();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
 
 // Load full perps list from Hyperliquid
 async function loadPerpList() {
