@@ -42726,7 +42726,7 @@ function aftdRenderDirectPosList(positions, liqPriceMap) {
       : `<span class="futd-tpsl-chip none">SL: —</span>`;
 
     const markStr = fmtPosPx(markP); // [vx13-POS-PX]
-    const liqStr  = liqP  > 0 ? liqP.toLocaleString('en',{maximumFractionDigits:4})  : '—';
+    const liqStr  = liqP  > 0 ? fmtPosPx(liqP)  : '—';   // [v4.18-LIQ-FMT] ทศนิยมตามช่วงราคาเดียวกับ Entry/Mark (เดิม 4 หลักเสมอ → 235,194.0088)
     const goDirect = `navTo('futures');requestAnimationFrame(()=>futSwitchTab('direct'))`;
 
     return `<div class="futd-pos-row" style="margin:8px 12px" onclick="${goDirect}">
@@ -45194,7 +45194,7 @@ function futdRenderPositions(positions) {
       : '';
 
     const markStr = fmtPosPx(markP); // [vx13-POS-PX]
-    const liqStr  = liqP  > 0 ? liqP.toLocaleString('en',{maximumFractionDigits:4})  : '—';
+    const liqStr  = liqP  > 0 ? fmtPosPx(liqP)  : '—';   // [v4.18-LIQ-FMT] ทศนิยมตามช่วงราคาเดียวกับ Entry/Mark (เดิม 4 หลักเสมอ → 235,194.0088)
 
     // [v2.53] mode badge
     const modeBadge = posMode === 'isolated'
@@ -45495,7 +45495,7 @@ function futdOpenMarginSheet(posId) {
     ` <span style="background:${pos.side==='long'?'rgba(14,203,129,.15)':'rgba(246,70,93,.15)'};color:${pos.side==='long'?'var(--g)':'var(--r)'};font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">${pos.side === 'long' ? 'LONG' : 'SHORT'} ${pos.lev}x ISO</span>`;
 
   setTxt('futdMgCurMargin', margin.toFixed(2) + ' USDT');
-  setTxt('futdMgLiq',       liqP > 0 ? liqP.toLocaleString('en', { maximumFractionDigits: 4 }) : '—');
+  setTxt('futdMgLiq',       liqP > 0 ? fmtPosPx(liqP) : '—');   // [v4.18-LIQ-FMT]
   setTxt('futdMgAvail',     avail.toFixed(2) + ' USDT');
   setTxt('futdMgEffLev',    effLev + 'x');
 
@@ -46259,7 +46259,7 @@ function futdOpenTpslSheet(posId) {
   if (symEl) symEl.innerHTML = `${pos.symbol} <span style="background:${pos.side==='long'?'rgba(14,203,129,.15)':'rgba(246,70,93,.15)'};color:${pos.side==='long'?'var(--g)':'var(--r)'};font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">${pos.side === 'long' ? 'LONG' : 'SHORT'} ${pos.lev}x</span>`;
 
   const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-  const liqStr = liqP > 0 ? liqP.toLocaleString('en',{maximumFractionDigits:4}) : '—';
+  const liqStr = liqP > 0 ? fmtPosPx(liqP) : '—';   // [v4.18-LIQ-FMT]
   setTxt('futdTpslEntry',         entryP > 0 ? entryP.toLocaleString('en',{maximumFractionDigits:4}) : '—');
   setTxt('futdTpslMark',          markP  > 0 ? markP.toLocaleString('en',{maximumFractionDigits:4})  : '—');
   setTxt('futdTpslLiq',           liqStr);
@@ -47956,7 +47956,9 @@ function futdChartDraw() {
     }
 
     // ── [FIX-7] Liq. Price line (เพิ่มใหม่ใน Direct — เหมือน Contract) ──
-    const liqP = parseFloat(p.liq_price || p.liq) || 0;
+    // [v4.18-LIQ-CHART] ใช้ Liq ตัวเดียวกับการ์ด (GAS map → Cross per-symbol → Isolated) — เดิมอ่าน p.liq_price ดิบจากชีต (Cross = placeholder สูตร Isolated) เส้นกราฟจึงไม่ตรงตัวเลขบนการ์ด
+    let liqP = 0;
+    try { liqP = _futdResolveLiq(p, (FUTD.status && FUTD.status.liq_price_map) || {}, futdPositions) || 0; } catch (e) { liqP = 0; }
     if (liqP > 0) {
       const ly = scY(liqP);
       if (ly >= PAD_T - 2 && ly <= H - PAD_B + 2) {
