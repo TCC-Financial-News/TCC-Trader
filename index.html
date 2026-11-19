@@ -42407,8 +42407,11 @@ function aftSetMode(mode) {
     if (typeof futdStartOrderBook === 'function' && !FUTD.obWs) {
       futdStartOrderBook();
     }
+    // [v4.17-DIRECT-PXFEED] ราคาสดทุกเหรียญที่ถือ (WS allMids) — Assets→Direct ใช้ FUTD.prices ชุดเดียวกัน
+    if (typeof futdStartPriceFeed === 'function') futdStartPriceFeed();
   } else {
     _aftdStopPricePoll();
+    if (typeof _futdPxSync === 'function') _futdPxSync();   // [v4.17-DIRECT-PXFEED] ไม่ต้องใช้แล้ว (ไม่ได้ดู Direct) → ปิดเอง
     // หยุด OB WS ที่ start เพราะ Assets Direct เพื่อไม่ใช้ bandwidth เกิน
     // (ถ้า Futures Direct tab เปิดอยู่ FUTD.pollTimer !== null → ไม่หยุด)
     if (typeof FUTD !== 'undefined' && FUTD.obWs && FUTD.pollTimer === null) {
@@ -42669,6 +42672,7 @@ function aftdPrefetchDirect() {
 }
 
 function aftdRenderDirectPosList(positions, liqPriceMap) {
+  try { setTimeout(_futdPxSync, 50); } catch (e) {}   // [v4.17-DIRECT-PXFEED] มี/ไม่มี position เปลี่ยน → เปิด/ปิดตัวป้อนราคา
   const el = document.getElementById('astFutDirectPosList');
   if (!el) return;
   if (!positions.length) {
@@ -42771,6 +42775,7 @@ const FUTD = {
   lastPrice: 0,            // ราคาล่าสุดของเหรียญที่เลือก
   prices: {},              // map coin → price สำหรับทุก position ที่เปิดอยู่
   pollTimer: null,
+  _pxWs: null, _pxTimer: null, _pxStamp: {},   // [v4.17-DIRECT-PXFEED] allMids feed ของทุกเหรียญที่ถือโพซิชั่น
   _astInFlight: false,     // [v2.52 FIX-POLL-LOCK] in-flight guard สำหรับ futdRefreshAccountStatus
   _astDirty: false,        // [v4.13-DIRECT-FRESH] มีคำสั่ง refresh (หลังเปิด/ปิด) เข้ามาระหว่าง in-flight → ทิ้งผลที่กำลังรอ แล้วดึงใหม่ทันที
   status: null,            // ผลล่าสุดจาก getFuturesAccountStatus
@@ -42922,9 +42927,12 @@ function futdInit() {
     // [FIX-POLL-LOCK] in-flight guard — skip ถ้า request ก่อนยังไม่เสร็จ
     if (!FUTD._astInFlight) futdRefreshAccountStatus();
   }, 15000);
+  // [v4.17-DIRECT-PXFEED] ราคาสดของทุกเหรียญที่ถือโพซิชั่น — แยกจาก pollTimer/GAS (หยุดนิ่งไม่ได้แม้ GAS timeout)
+  futdStartPriceFeed();
 }
 
 function futdStopPolling() {
+  futdStopPriceFeed();   // [v4.17-DIRECT-PXFEED]
   if (FUTD.pollTimer) { clearInterval(FUTD.pollTimer); FUTD.pollTimer = null; }
   // [v2.51] หยุด Funding timer ด้วย
   if (FUTD.fundingTimer) { clearInterval(FUTD.fundingTimer); FUTD.fundingTimer = null; }
@@ -43543,6 +43551,7 @@ function futdStartOrderBook() {
           }
 
           // อัปเดต lastPrice จาก trade (แม่นยำกว่า mid price จาก OB)
+          FUTD._tradeTs = Date.now();   // [v4.17-DIRECT-PXFEED] allMids feed ให้ทางแก่ trade tick ของเหรียญที่เลือก
           FUTD.lastPrice = tradePrice;
           if (!FUTD.prices) FUTD.prices = {};
           FUTD.prices[tradeCoin] = tradePrice;
@@ -44356,6 +44365,184 @@ async function _futdFetchMidFor(coin) {
   return px;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   [v4.17-DIRECT-PXFEED] ตัวป้อนราคาสดของ "ทุกเหรียญที่มีโพซิชั่น" ใน Direct
+   สาเหตุเดิม: WebSocket (Order Book/trades) ของ Direct ดูแลเฉพาะ "เหรียญที่เลือกอยู่" เท่านั้น
+     เหรียญอื่นที่ถือโพซิชั่นอยู่ (เช่น เปิด BTC แต่ถือ NVDA / เปิด NVDA แต่ถือ BTC) ได้ราคาจาก REST ทุก 15 วิ
+     ผ่าน FUTD.pollTimer ตัวเดียวกับการดึงสถานะบัญชีจาก GAS → ถ้า GAS timeout ระบบหยุด pollTimer 60 วิ
+     (futdRefreshAccountStatus backoff) ราคาเหรียญอื่นจึงหยุดนิ่งทั้งหมด · และ hlPost ต้องต่อคิวร่วมกับคำขอหนักอื่น
+   แก้: socket allMids แยกต่างหาก (dex หลัก + dex xyz) → ราคาเหรียญอื่นขยับทุกบล็อก ไม่ผูกกับ pollTimer/GAS
+        + REST สำรองทุก ~4 วิ เฉพาะเมื่อ WS เงียบ + ตรวจ socket ค้าง (zombie) หลังพักหน้าจอ/BF Cache
+   ══════════════════════════════════════════════════════════════ */
+/** ต้องมีตัวป้อนราคาสดหรือไม่: ล็อกอินแล้ว และกำลังดู Futures→Direct หรือ Assets→Futures-Direct */
+function _futdPxWanted() {
+  try {
+    if (!_futdCurrentUid()) return false;
+    const onFutd = (currentPage === 'futures') && (typeof _futActiveTab !== 'undefined') && _futActiveTab === 'direct';
+    const onAftd = (currentPage === 'assets') && (typeof AFTD !== 'undefined') && AFTD.mode === 'direct';
+    return !!(onFutd || onAftd);
+  } catch (e) { return false; }
+}
+
+/** รวมราคา allMids เข้า FUTD.prices — คืนจำนวนเหรียญที่อัปเดต
+ *  กฎเดียวกับ futdRefreshPrice: เหรียญที่ลงทะเบียนเป็น xyz → ราคา dex xyz ชนะ · ข้าม spot (@123) */
+function _futdPxMerge(mids, fromXyz, force) {
+  if (!mids || typeof mids !== 'object') return 0;
+  if (!FUTD.prices) FUTD.prices = {};
+  if (!FUTD._pxStamp) FUTD._pxStamp = {};
+  const now = Date.now();
+  const sel = FUTD.symbolCoin;
+  // เหรียญที่เลือกอยู่: ถ้า Order Book WS ส่ง trade มาใน 3 วิล่าสุด ให้ WS นั้นเป็นเจ้าของราคา (กันค่ากระโดดสลับ trade/mid)
+  const selOwnedByOb = !force && !!(FUTD.obWs && FUTD.obWs.readyState === 1) && (now - (FUTD._tradeTs || 0) < 3000);
+  let n = 0;
+  for (const k in mids) {
+    if (k.charAt(0) === '@') continue;
+    const pref = k.indexOf(':') > 0;
+    const nk = pref ? k.split(':').pop() : k;
+    const v = parseFloat(mids[k]);
+    if (!(v > 0)) continue;
+    if (selOwnedByOb && nk === sel) continue;
+    if (fromXyz || pref) {
+      if (!(_isMetalCoin(nk) || !FUTD.prices[nk])) continue;
+    } else if (_isMetalCoin(nk)) {
+      continue;   // เหรียญ xyz ใช้ราคาจาก dex xyz เท่านั้น
+    }
+    FUTD.prices[nk] = v;
+    FUTD._pxStamp[nk] = now;
+    n++;
+  }
+  return n;
+}
+
+/** วาดตัวเลขที่เกี่ยวกับราคาใหม่ (throttle ~4 ครั้ง/วิ) — การ์ด Position ของ Direct + Assets→Direct */
+function _futdPxScheduleApply() {
+  if (FUTD._pxApplyT) return;
+  FUTD._pxApplyT = setTimeout(() => {
+    FUTD._pxApplyT = null;
+    try {
+      const sp = FUTD.prices && FUTD.prices[FUTD.symbolCoin];
+      if (sp > 0 && !(FUTD.obWs && (Date.now() - (FUTD._tradeTs || 0) < 3000))) {
+        const tk = document.getElementById('futd-tk-mark');
+        if (tk) tk.textContent = fmtP(sp);
+      }
+      if (FUTD.status) futdUpdatePnlCards();
+      if (currentPage === 'assets' && typeof AFTD !== 'undefined' && AFTD.mode === 'direct' &&
+          AFTD.positions && AFTD.positions.length) aftdUpdateUnrealizedPnl();
+    } catch (e) { console.warn('[_futdPxApply]', e && e.message); }
+  }, 250);
+}
+
+/** REST สำรอง: ดึง allMids (dex หลัก + xyz เมื่อจำเป็น) ผ่านเส้นทางแยกจาก pollTimer */
+async function _futdPxRest() {
+  if (FUTD._pxRestBusy) return;
+  FUTD._pxRestBusy = true;
+  try {
+    const coins = _futdPositionCoins();
+    const needMetal = coins.some(c => _isMetalCoin(c));
+    const arr = [ hlPost({ type: 'allMids' }, 1) ];
+    if (needMetal) arr.push(hlPost({ type: 'allMids', dex: METAL_DEX }, 1).catch(() => null));
+    let [mids, metalMids] = await Promise.all(arr);
+    // XYZ_COINS ยังไม่รู้จักเหรียญที่ถืออยู่ (รายการยังโหลดไม่เสร็จ) แต่ dex หลักไม่มีราคาเหรียญนั้น → ลอง dex xyz
+    if (!needMetal && mids && typeof mids === 'object' && coins.some(c => mids[c] === undefined)) {
+      metalMids = await hlPost({ type: 'allMids', dex: METAL_DEX }, 1).catch(() => null);
+    }
+    const a = _futdPxMerge(mids, false, true);
+    const b = _futdPxMerge(metalMids, true, true);
+    if (a + b > 0) _futdPxScheduleApply();
+  } catch (e) { /* รอบหน้าลองใหม่ */ }
+  finally { FUTD._pxRestBusy = false; }
+}
+
+function _futdPxCloseWs() {
+  if (FUTD._pxPingT) { clearInterval(FUTD._pxPingT); FUTD._pxPingT = null; }
+  if (FUTD._pxReconnT) { clearTimeout(FUTD._pxReconnT); FUTD._pxReconnT = null; }
+  const ws = FUTD._pxWs;
+  FUTD._pxWs = null;
+  if (ws) { try { ws.close(); } catch (e) {} }
+}
+
+function _futdPxOpenWs() {
+  if (FUTD._pxWs) return;
+  let ws;
+  try { ws = new WebSocket('wss://api.hyperliquid.xyz/ws'); } catch (e) { return; }
+  FUTD._pxWs = ws;
+  FUTD._pxOpenAt = Date.now();
+  ws.onopen = () => {
+    if (FUTD._pxWs !== ws) { try { ws.close(); } catch (e) {} return; }
+    try {
+      ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } }));
+      ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids', dex: METAL_DEX } }));
+    } catch (e) {}
+  };
+  ws.onmessage = (evt) => {
+    if (FUTD._pxWs !== ws) return;
+    try {
+      const d = JSON.parse(evt.data);
+      if (d.channel !== 'allMids' || !d.data || !d.data.mids) return;
+      FUTD._pxLastWs = Date.now();
+      if (_futdPxMerge(d.data.mids, false, false) > 0) _futdPxScheduleApply();
+    } catch (e) { /* ignore */ }
+  };
+  // heartbeat เหมือน Order Book WS — กัน server ตัด idle connection
+  if (FUTD._pxPingT) clearInterval(FUTD._pxPingT);
+  const pt = FUTD._pxPingT = setInterval(() => {
+    if (FUTD._pxWs !== ws) { clearInterval(pt); return; }
+    if (ws.readyState === WebSocket.OPEN) { try { ws.send(JSON.stringify({ method: 'ping' })); } catch (e) {} }
+  }, 20000);
+  ws.onerror = () => {};
+  ws.onclose = () => {
+    if (FUTD._pxWs !== ws) return;     // ถูกแทนที่/ปิดโดยตั้งใจแล้ว
+    FUTD._pxWs = null;
+    if (FUTD._pxPingT) { clearInterval(FUTD._pxPingT); FUTD._pxPingT = null; }
+    if (_futdPxWanted() && !FUTD._pxReconnT) {
+      FUTD._pxReconnT = setTimeout(() => { FUTD._pxReconnT = null; _futdPxSync(); }, 1500);
+    }
+  };
+}
+
+/** ตรวจสถานะตัวป้อนราคา (เรียกจาก timer 4 วิ + ทุกครั้งที่วาดรายการ Position):
+ *  ไม่ต้องใช้ → ปิด · ไม่มี position → ปิด socket · มี position → เปิด socket + REST สำรองถ้าเหรียญใดเงียบ */
+function _futdPxSync() {
+  try {
+    if (!_futdPxWanted()) { futdStopPriceFeed(); return; }
+    if (!FUTD._pxTimer) FUTD._pxTimer = setInterval(_futdPxSync, 4000);
+    const coins = _futdPositionCoins();
+    if (!coins.length) { _futdPxCloseWs(); return; }
+    const now = Date.now();
+    // socket ค้าง (OPEN แต่ไม่มีข้อมูลเกิน 12 วิ) หรือยังไม่เคยได้ข้อมูลหลังเปิดเกิน 12 วิ → เปิดใหม่
+    const ws = FUTD._pxWs;
+    if (ws && (now - Math.max(FUTD._pxLastWs || 0, FUTD._pxOpenAt || 0)) > 12000) _futdPxCloseWs();
+    if (!FUTD._pxWs && !FUTD._pxReconnT) _futdPxOpenWs();
+    if (document.hidden) return;
+    const obLive = !!(FUTD.obWs && FUTD.obWs.readyState === 1 && (now - (FUTD._tradeTs || 0) < 3000));
+    const stale = coins.some(c => {
+      if (c === FUTD.symbolCoin && obLive) return false;
+      const t = FUTD._pxStamp && FUTD._pxStamp[c];
+      return !(t && now - t < 5000) || !(FUTD.prices && FUTD.prices[c] > 0);
+    });
+    if (stale) _futdPxRest();
+  } catch (e) { console.warn('[_futdPxSync]', e && e.message); }
+}
+function futdStartPriceFeed() { _futdPxSync(); }
+function futdStopPriceFeed() {
+  if (FUTD._pxTimer) { clearInterval(FUTD._pxTimer); FUTD._pxTimer = null; }
+  if (FUTD._pxApplyT) { clearTimeout(FUTD._pxApplyT); FUTD._pxApplyT = null; }
+  _futdPxCloseWs();
+}
+// กลับเข้าหน้าจอ/BF Cache restore: socket มักค้างเงียบ → เปิดใหม่ + ดึง REST ทันที
+(function _futdPxResume() {
+  const resume = () => {
+    try {
+      if (typeof FUTD === 'undefined' || !_futdPxWanted()) return;
+      _futdPxCloseWs();
+      _futdPxSync();
+      _futdPxRest();
+    } catch (e) {}
+  };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resume(); });
+  window.addEventListener('pageshow', e => { if (e.persisted) resume(); });
+})();
+
 /** แท่งเทียนใน FUTD.chart เป็นของเหรียญที่เลือกอยู่จริงหรือไม่ (กันตัวเลขเหรียญเก่าปนเมื่อสลับเหรียญ) */
 function _futdCandlesFresh() {
   return !!(FUTD.chart && FUTD.chart.candles && FUTD.chart.candles.length && FUTD.chart.candlesCoin === FUTD.symbolCoin);
@@ -44941,6 +45128,7 @@ function futdRzRender(p, items, mode, totalOverride) {
 }
 
 function futdRenderPositions(positions) {
+  try { setTimeout(_futdPxSync, 50); } catch (e) {}   // [v4.17-DIRECT-PXFEED] มี/ไม่มี position เปลี่ยน → เปิด/ปิดตัวป้อนราคา
   const el = document.getElementById('futd-positions-list');
   if (!el) return;
 
